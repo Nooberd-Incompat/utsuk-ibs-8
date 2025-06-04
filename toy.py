@@ -299,11 +299,9 @@ class CybersecurityIRSystem:
             logger.info("Starting indexing process...")
             self.index = indexer.index(cleaned_documents)
             
-            # Initialize retrieval models
-            logger.info("Initializing retrieval models...")
+            # Initialize retrieval model
+            logger.info("Initializing BM25 retrieval model...")
             self.retrieval_model = pt.BatchRetrieve(self.index, wmodel="BM25", num_results=20)
-            self.tfidf_model = pt.BatchRetrieve(self.index, wmodel="TF_IDF", num_results=20)
-            self.dph_model = pt.BatchRetrieve(self.index, wmodel="DPH", num_results=20)
             
             logger.info(f"Index built successfully with {len(cleaned_documents)} documents")
             
@@ -339,8 +337,6 @@ class CybersecurityIRSystem:
                 )
                 self.index = indexer.index(cleaned_documents)
                 self.retrieval_model = pt.BatchRetrieve(self.index, wmodel="BM25", num_results=20)
-                self.tfidf_model = pt.BatchRetrieve(self.index, wmodel="TF_IDF", num_results=20)  
-                self.dph_model = pt.BatchRetrieve(self.index, wmodel="DPH", num_results=20)
                 logger.info(f"Fallback index built successfully with {len(cleaned_documents)} documents")
             except Exception as fallback_e:
                 logger.error(f"Fallback index build also failed: {fallback_e}")
@@ -348,7 +344,7 @@ class CybersecurityIRSystem:
                 logger.error(f"Fallback traceback: {traceback.format_exc()}")
                 self.index = None
 
-    def search(self, query: str, num_results: int = 10, model: str = "BM25") -> pd.DataFrame:
+    def search(self, query: str, num_results: int = 10) -> pd.DataFrame:
         if self.index is None:
             logger.error("Index not built")
             return pd.DataFrame()
@@ -361,37 +357,46 @@ class CybersecurityIRSystem:
             return pd.DataFrame()
 
         logger.info(f"Searching for: '{original_query}' -> '{query}'")
-
-        models = {
-            "BM25": self.retrieval_model,
-            "TF_IDF": self.tfidf_model,
-            "DPH": self.dph_model
-        }
-        retriever = models.get(model, self.retrieval_model)
         
         try:
             qdf = pd.DataFrame([{'qid': '1', 'query': query}])
-            results = retriever.transform(qdf).head(num_results)
+            results = self.retrieval_model.transform(qdf).head(num_results)
 
             if not results.empty:
-                # Create lookup dictionary for document metadata
-                doc_lookup = {doc['docno']: doc for doc in self.documents}
-                preview_lookup = getattr(self, 'preview_info', {})
+                # Debug: Print what docnos we got
+                logger.info(f"Retrieved docnos: {results['docno'].tolist()}")
                 
-                # Add metadata to results
-                results['title'] = results['docno'].map(lambda x: doc_lookup.get(x, {}).get('title', 'Unknown'))
-                results['source_file'] = results['docno'].map(lambda x: doc_lookup.get(x, {}).get('source_file', 'Unknown'))
-                results['chunk_id'] = results['docno'].map(lambda x: doc_lookup.get(x, {}).get('chunk_id', '0'))
-                results['doc_id'] = results['docno'].map(lambda x: doc_lookup.get(x, {}).get('doc_id', '0'))
+                # Create lookup dictionary for document metadata  
+                doc_lookup = {}
+                for doc in self.documents:
+                    doc_lookup[doc['docno']] = doc
+                
+                # Debug: Print available docnos in lookup
+                logger.info(f"Available docnos in lookup: {list(doc_lookup.keys())[:5]}...")  # Show first 5
+                
+                # Add metadata to results with better error handling
+                def safe_get(docno, field, default='Unknown'):
+                    doc = doc_lookup.get(docno, {})
+                    return doc.get(field, default)
+                
+                results['title'] = results['docno'].apply(lambda x: safe_get(x, 'title'))
+                results['source_file'] = results['docno'].apply(lambda x: safe_get(x, 'source_file'))
+                results['chunk_id'] = results['docno'].apply(lambda x: safe_get(x, 'chunk_id', '0'))
+                results['doc_id'] = results['docno'].apply(lambda x: safe_get(x, 'doc_id', '0'))
                 
                 # Add preview information
-                results['original_text'] = results['docno'].map(lambda x: preview_lookup.get(x, {}).get('original_text', ''))
-                results['file_extension'] = results['docno'].map(lambda x: preview_lookup.get(x, {}).get('file_extension', ''))
+                preview_lookup = getattr(self, 'preview_info', {})
+                results['original_text'] = results['docno'].apply(lambda x: preview_lookup.get(x, {}).get('original_text', 'No preview available'))
                 
                 # Sort by score (descending)
                 results = results.sort_values('score', ascending=False)
                 
                 logger.info(f"Found {len(results)} results for query: {original_query}")
+                
+                # Debug: Print first result details
+                if len(results) > 0:
+                    first_result = results.iloc[0]
+                    logger.info(f"First result - docno: {first_result['docno']}, title: {first_result['title']}, source: {first_result['source_file']}")
             else:
                 logger.warning(f"No results found for query: {original_query}")
             
@@ -399,6 +404,8 @@ class CybersecurityIRSystem:
             
         except Exception as e:
             logger.error(f"Search failed for query '{original_query}': {e}")
+            import traceback
+            logger.error(f"Search traceback: {traceback.format_exc()}")
             return pd.DataFrame()
 
     def display_search_results(self, results: pd.DataFrame, show_preview: bool = True):
@@ -467,14 +474,13 @@ if __name__ == "__main__":
                     print(f"Query: '{q}'")
                     print('='*60)
                     
-                    for model in ["BM25", "TF_IDF"]:
-                        print(f"\n--- Results using {model} ---")
-                        results = ir.search(q, num_results=5, model=model)
+                    print(f"\n--- Results using BM25 ---")
+                    results = ir.search(q, num_results=5)
                         
-                        if not results.empty:
-                            ir.display_search_results(results, show_preview=True)
-                        else:
-                            print("No results found")
+                    if not results.empty:
+                        ir.display_search_results(results, show_preview=True)
+                    else:
+                        ("No results found")
             else:
                 print("Failed to build index")
         else:

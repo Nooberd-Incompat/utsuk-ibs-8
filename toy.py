@@ -4,7 +4,7 @@ import os
 import re
 from pathlib import Path
 import json
-from typing import List, Dict, Tuple
+from typing import List, Dict
 import PyPDF2
 from docx import Document
 import nltk
@@ -12,618 +12,475 @@ from nltk.corpus import stopwords
 from nltk.tokenize import sent_tokenize, word_tokenize
 import logging
 
-# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class CybersecurityIRSystem:
-    """
-    Information Retrieval System for Cybersecurity Books using PyTerrier
-    """
-    
     def __init__(self, index_path: str = "./cybersec_index"):
-        """
-        Initialize the IR system
-        
-        Args:
-            index_path: Path where the Terrier index will be stored
-        """
         # Initialize PyTerrier
-        if not pt.java.started():
-            pt.java.init()
-        
-        # Create absolute path for index
+        if not pt.started():
+            pt.init()
+
         self.index_path = os.path.abspath(index_path)
-        
-        # Create index directory if it doesn't exist
         os.makedirs(self.index_path, exist_ok=True)
-        
         self.index = None
         self.retrieval_model = None
         self.documents = []
-        
-        # Download required NLTK data
+
+        # Download NLTK data if needed
         try:
             nltk.data.find('tokenizers/punkt')
-            nltk.data.find('tokenizers/punkt_tab')
             nltk.data.find('corpora/stopwords')
         except LookupError:
-            nltk.download('punkt')
-            nltk.download('punkt_tab')
-            nltk.download('stopwords')
-        
+            logger.info("Downloading NLTK data...")
+            nltk.download('punkt', quiet=True)
+            nltk.download('stopwords', quiet=True)
+
         self.stop_words = set(stopwords.words('english'))
-        
+
     def preprocess_text(self, text: str) -> str:
-        """
-        Preprocess text for better indexing
+        """Less aggressive preprocessing to preserve important terms"""
+        if not isinstance(text, str):
+            return ""
         
-        Args:
-            text: Raw text to preprocess
-            
-        Returns:
-            Preprocessed text
-        """
-        # Remove special characters and normalize whitespace
-        text = re.sub(r'[^\w\s]', ' ', text)
+        # Remove excessive whitespace and normalize
+        text = re.sub(r'\s+', ' ', text)
+        text = text.strip()
+        
+        # Only remove some punctuation, keep important ones like hyphens
+        text = re.sub(r'[^\w\s\-\.]', ' ', text)
         text = re.sub(r'\s+', ' ', text)
         
-        # Convert to lowercase
-        text = text.lower().strip()
-        
-        return text
-    
+        # Convert to lowercase but preserve original structure
+        return text.lower()
+
     def extract_text_from_pdf(self, file_path: str) -> str:
-        """
-        Extract text from PDF file
-        
-        Args:
-            file_path: Path to PDF file
-            
-        Returns:
-            Extracted text
-        """
         try:
             with open(file_path, 'rb') as file:
-                pdf_reader = PyPDF2.PdfReader(file)
+                reader = PyPDF2.PdfReader(file)
                 text = ""
-                for page in pdf_reader.pages:
-                    text += page.extract_text() + "\n"
+                for page_num, page in enumerate(reader.pages):
+                    page_text = page.extract_text()
+                    if page_text:
+                        text += f"\n--- Page {page_num + 1} ---\n{page_text}\n"
                 return text
         except Exception as e:
-            logger.error(f"Error extracting text from PDF {file_path}: {e}")
+            logger.error(f"PDF extraction failed for {file_path}: {e}")
             return ""
-    
+
     def extract_text_from_docx(self, file_path: str) -> str:
-        """
-        Extract text from DOCX file
-        
-        Args:
-            file_path: Path to DOCX file
-            
-        Returns:
-            Extracted text
-        """
         try:
             doc = Document(file_path)
-            text = ""
-            for paragraph in doc.paragraphs:
-                text += paragraph.text + "\n"
-            return text
+            full_text = []
+            for para in doc.paragraphs:
+                if para.text.strip():
+                    full_text.append(para.text)
+            return "\n".join(full_text)
         except Exception as e:
-            logger.error(f"Error extracting text from DOCX {file_path}: {e}")
+            logger.error(f"DOCX extraction failed for {file_path}: {e}")
             return ""
-    
-    def chunk_text(self, text: str, chunk_size: int = 30, overlap: int = 400) -> List[str]:
-        """
-        Split text into overlapping chunks for better retrieval
+
+    def chunk_text(self, text: str, chunk_size: int = 500, overlap: int = 100) -> List[str]:
+        """Improved chunking with sentence boundaries"""
+        if not text or len(text) < 50:
+            return []
         
-        Args:
-            text: Text to chunk
-            chunk_size: Maximum size of each chunk (in characters)
-            overlap: Overlap between consecutive chunks
-            
-        Returns:
-            List of text chunks
-        """
-        if len(text) <= chunk_size:
-            return [text]
-        
-        # Split by paragraphs first (double newlines)
-        paragraphs = text.split('\n\n')
-        chunks = []
-        current_chunk = ""
-        
-        for para in paragraphs:
-            para = para.strip()
-            if not para:
-                continue
-                
-            # If adding this paragraph would exceed chunk size
-            if len(current_chunk) + len(para) + 2 > chunk_size:
-                if current_chunk:
-                    chunks.append(current_chunk.strip())
-                    
-                    # Create overlap from the end of current chunk
-                    if overlap > 0:
-                        words = current_chunk.split()
-                        overlap_words = words[-overlap//20:] if len(words) > overlap//20 else words[-20:]
-                        current_chunk = ' '.join(overlap_words) + '\n\n' + para
-                    else:
-                        current_chunk = para
-                else:
-                    # Single paragraph is too large, split by sentences
-                    sentences = sent_tokenize(para)
-                    temp_chunk = ""
-                    
-                    for sent in sentences:
-                        if len(temp_chunk) + len(sent) + 1 > chunk_size:
-                            if temp_chunk:
-                                chunks.append(temp_chunk.strip())
-                                temp_chunk = sent
-                            else:
-                                # Single sentence is very long, split by words
-                                words = sent.split()
-                                word_chunk = ""
-                                for word in words:
-                                    if len(word_chunk) + len(word) + 1 > chunk_size:
-                                        if word_chunk:
-                                            chunks.append(word_chunk.strip())
-                                        word_chunk = word
-                                    else:
-                                        word_chunk += " " + word if word_chunk else word
-                                if word_chunk:
-                                    chunks.append(word_chunk.strip())
-                        else:
-                            temp_chunk += " " + sent if temp_chunk else sent
-                    
-                    if temp_chunk:
-                        current_chunk = temp_chunk
-            else:
-                current_chunk += "\n\n" + para if current_chunk else para
-        
-        if current_chunk and current_chunk.strip():
-            chunks.append(current_chunk.strip())
-        
-        # Filter out very short chunks
-        chunks = [chunk for chunk in chunks if len(chunk.strip()) > 100]
-        
-        return chunks if chunks else [text]  # Return original text if no good chunks
-    
-    def load_documents_from_directory(self, directory_path: str) -> List[Dict]:
-        """
-        Load and process documents from a directory
-        
-        Args:
-            directory_path: Path to directory containing documents
-            
-        Returns:
-            List of processed documents
-        """
-        documents = []
-        directory = Path(directory_path)
-        
-        if not directory.exists():
-            logger.error(f"Directory {directory_path} does not exist")
-            return documents
-        
-        doc_id = 0
-        for file_path in directory.rglob("*"):
-            if file_path.is_file():
-                file_ext = file_path.suffix.lower()
-                
-                try:
-                    if file_ext == '.pdf':
-                        text = self.extract_text_from_pdf(str(file_path))
-                    elif file_ext == '.docx':
-                        text = self.extract_text_from_docx(str(file_path))
-                    elif file_ext == '.txt':
-                        with open(file_path, 'r', encoding='utf-8') as f:
-                            text = f.read()
-                    else:
-                        continue
-                    
-                    if text.strip():
-                        # Preprocess text
-                        processed_text = self.preprocess_text(text)
-                        
-                        # Create chunks for better retrieval
-                        chunks = self.chunk_text(processed_text)
-                        
-                        for i, chunk in enumerate(chunks):
-                            documents.append({
-                                'docno': f"doc{doc_id}_c{i}",
-                                'text': chunk,
-                                'title': file_path.stem,
-                                'source_file': str(file_path),
-                                'chunk_id': i,
-                                'doc_id': doc_id
-                            })
-                        
-                        doc_id += 1
-                        logger.info(f"Processed {file_path.name}: {len(chunks)} chunks")
-                
-                except Exception as e:
-                    logger.error(f"Error processing {file_path}: {e}")
-        
-        logger.info(f"Total documents processed: {len(documents)}")
-        return documents
-    
-    def load_single_document(self, file_path: str, title: str = None) -> List[Dict]:
-        """
-        Load and process a single document
-        
-        Args:
-            file_path: Path to the document
-            title: Optional title for the document
-            
-        Returns:
-            List of processed document chunks
-        """
-        documents = []
-        path = Path(file_path)
-        
-        if not path.exists():
-            logger.error(f"File {file_path} does not exist")
-            return documents
-        
-        file_ext = path.suffix.lower()
-        
+        # Try sentence-based chunking first
         try:
-            if file_ext == '.pdf':
-                text = self.extract_text_from_pdf(file_path)
-            elif file_ext == '.docx':
-                text = self.extract_text_from_docx(file_path)
-            elif file_ext == '.txt':
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    text = f.read()
-            else:
-                logger.error(f"Unsupported file format: {file_ext}")
-                return documents
+            sentences = sent_tokenize(text)
+            if len(sentences) < 2:
+                # Fallback to word-based chunking
+                words = word_tokenize(text)
+                if len(words) < 50:
+                    return [text] if len(words) > 10 else []
+                
+                chunks = []
+                for i in range(0, len(words), chunk_size - overlap):
+                    chunk_words = words[i:i + chunk_size]
+                    if len(chunk_words) > 10:  # Only keep substantial chunks
+                        chunks.append(" ".join(chunk_words))
+                return chunks
             
-            if text.strip():
-                processed_text = self.preprocess_text(text)
-                chunks = self.chunk_text(processed_text)
+            # Sentence-based chunking
+            chunks = []
+            current_chunk = []
+            current_length = 0
+            
+            for sentence in sentences:
+                sentence_words = len(word_tokenize(sentence))
                 
-                doc_title = title or path.stem
-                
-                for i, chunk in enumerate(chunks):
-                    documents.append({
-                        'docno': f"doc0_c{i}",
-                        'text': chunk,
-                        'title': doc_title,
-                        'source_file': file_path,
-                        'chunk_id': i,
-                        'doc_id': 0
-                    })
-                
-                logger.info(f"Processed {path.name}: {len(chunks)} chunks")
-        
+                if current_length + sentence_words > chunk_size and current_chunk:
+                    # Finalize current chunk
+                    chunk_text = " ".join(current_chunk)
+                    if len(word_tokenize(chunk_text)) > 20:  # Only keep substantial chunks
+                        chunks.append(chunk_text)
+                    
+                    # Start new chunk with overlap
+                    if overlap > 0 and len(current_chunk) > 1:
+                        overlap_sentences = current_chunk[-2:]  # Keep last 2 sentences
+                        current_chunk = overlap_sentences + [sentence]
+                        current_length = sum(len(word_tokenize(s)) for s in current_chunk)
+                    else:
+                        current_chunk = [sentence]
+                        current_length = sentence_words
+                else:
+                    current_chunk.append(sentence)
+                    current_length += sentence_words
+            
+            # Add final chunk
+            if current_chunk:
+                chunk_text = " ".join(current_chunk)
+                if len(word_tokenize(chunk_text)) > 20:
+                    chunks.append(chunk_text)
+            
+            return chunks
+            
         except Exception as e:
-            logger.error(f"Error processing {file_path}: {e}")
+            logger.warning(f"Sentence tokenization failed: {e}, falling back to word-based chunking")
+            
+            # Fallback to word-based chunking
+            words = word_tokenize(text)
+            if len(words) < 50:
+                return [text] if len(words) > 10 else []
+            
+            chunks = []
+            for i in range(0, len(words), chunk_size - overlap):
+                chunk_words = words[i:i + chunk_size]
+                if len(chunk_words) > 10:
+                    chunks.append(" ".join(chunk_words))
+            return chunks
+
+    def load_documents_from_directory(self, directory_path: str) -> List[Dict]:
+        documents = []
+        doc_id = 0
+        directory = Path(directory_path)
+
+        supported_extensions = ['.pdf', '.docx', '.txt']
+        files_found = list(directory.glob("*.*"))
         
+        logger.info(f"Found {len(files_found)} files in directory")
+        
+        for file_path in files_found:
+            ext = file_path.suffix.lower()
+            if ext not in supported_extensions:
+                logger.info(f"Skipping unsupported file: {file_path.name}")
+                continue
+
+            try:
+                logger.info(f"Processing file: {file_path.name}")
+                text = ""
+                
+                if ext == '.pdf':
+                    text = self.extract_text_from_pdf(str(file_path))
+                elif ext == '.docx':
+                    text = self.extract_text_from_docx(str(file_path))
+                elif ext == '.txt':
+                    with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        text = f.read()
+
+                if not text or len(text.strip()) < 50:
+                    logger.warning(f"No meaningful text extracted from {file_path.name}")
+                    continue
+
+                # Store original text for preview
+                original_text = text
+                text = self.preprocess_text(text)
+                
+                if not text:
+                    logger.warning(f"Text became empty after preprocessing for {file_path.name}")
+                    continue
+
+                chunks = self.chunk_text(text)
+                logger.info(f"Created {len(chunks)} chunks from {file_path.name}")
+                
+                if not chunks:
+                    logger.warning(f"No chunks created for {file_path.name}")
+                    continue
+
+                for i, chunk in enumerate(chunks):
+                    # Store both processed and original text portions for preview
+                    chunk_start = i * 400  # Approximate start position
+                    chunk_end = min(chunk_start + 800, len(original_text))
+                    original_chunk = original_text[chunk_start:chunk_end]
+                    
+                    documents.append({
+                        'docno': f'doc{doc_id}_chunk{i}',
+                        'text': chunk,
+                        'title': file_path.stem,
+                        'source_file': str(file_path),
+                        'chunk_id': str(i),
+                        'doc_id': str(doc_id)
+                    })
+                    
+                    # Store preview information separately for display
+                    self.preview_info = getattr(self, 'preview_info', {})
+                    self.preview_info[f'doc{doc_id}_chunk{i}'] = {
+                        'original_text': original_chunk[:500] + "..." if len(original_chunk) > 500 else original_chunk,
+                        'file_extension': ext,
+                        'chunk_size': len(chunk)
+                    }
+                
+                logger.info(f"Successfully processed {file_path.name}: {len(chunks)} chunks")
+                doc_id += 1
+
+            except Exception as e:
+                logger.error(f"Error processing {file_path.name}: {e}")
+                continue
+
+        self.documents = documents
+        logger.info(f"Total documents loaded: {len(documents)} chunks from {doc_id} files")
         return documents
-    
+
     def build_index(self, documents: List[Dict] = None):
-        """
-        Build Terrier index from documents
-        
-        Args:
-            documents: List of documents to index (uses self.documents if None)
-        """
         if documents is not None:
             self.documents = documents
-        
+
         if not self.documents:
             logger.error("No documents to index")
             return
+
+        logger.info(f"Building index with {len(self.documents)} document chunks")
         
-        # Create DataFrame for PyTerrier
-        df = pd.DataFrame(self.documents)
+        # Clean documents and ensure all required fields are strings
+        cleaned_documents = []
+        for doc in self.documents:
+            cleaned_doc = {
+                'docno': str(doc.get('docno', '')),
+                'text': str(doc.get('text', '')),
+                'title': str(doc.get('title', '')),
+                'source_file': str(doc.get('source_file', '')),
+                'chunk_id': str(doc.get('chunk_id', '0')),
+                'doc_id': str(doc.get('doc_id', '0'))
+            }
+            # Only add non-empty documents
+            if cleaned_doc['text'].strip():
+                cleaned_documents.append(cleaned_doc)
         
-        # Build index with proper meta configuration
-        logger.info("Building index...")
+        if not cleaned_documents:
+            logger.error("No valid documents after cleaning")
+            return
+            
+        self.documents = cleaned_documents
+        logger.info(f"Cleaned documents: {len(cleaned_documents)} valid documents")
         
-        # Get the maximum text length from documents
-        max_text_length = max(len(doc['text']) for doc in self.documents) if self.documents else 10000
-        # Add some buffer to the max length
-        text_field_length = max_text_length + 1000
+        # Calculate max text length safely
+        text_lengths = []
+        for doc in cleaned_documents:
+            text_len = len(doc.get('text', ''))
+            if text_len > 0:
+                text_lengths.append(text_len)
         
-        logger.info(f"Configuring index with text field length: {text_field_length}")
-        
-        # Configure meta field lengths to handle content
+        if not text_lengths:
+            logger.error("No documents with text content found")
+            return
+            
+        max_text_len = max(text_lengths) + 1000
+        logger.info(f"Maximum text length: {max_text_len}")
+
+        # Simplified metadata configuration - only essential fields
         meta_config = {
-            'docno': 50,  # Length for document IDs
-            'text': text_field_length  # Dynamic length based on actual content
+            'docno': 100,
+            'text': max(10000, int(max_text_len)),  # Ensure minimum size
+            'title': 300,
+            'source_file': 500,
+            'chunk_id': 50,
+            'doc_id': 50
         }
-        
+
         try:
-            indexer = pt.IterDictIndexer(self.index_path, overwrite=True, meta=meta_config)
-            self.index = indexer.index(self.documents)
-        except Exception as e:
-            logger.error(f"Error building index: {e}")
-            # Try with a very large text field length as fallback
-            logger.info("Retrying with maximum text field length...")
-            meta_config['text'] = 500000  # 500K characters
-            indexer = pt.IterDictIndexer(self.index_path, overwrite=True, meta=meta_config)
-            self.index = indexer.index(self.documents)
-        
-        logger.info(f"Index built successfully with {len(self.documents)} documents")
-        
-        # Initialize retrieval model with different scoring options
-        self.retrieval_model = pt.BatchRetrieve(self.index, wmodel="BM25")
-        
-        # Also create alternative models for comparison
-        self.tfidf_model = pt.BatchRetrieve(self.index, wmodel="TF_IDF")
-        self.dph_model = pt.BatchRetrieve(self.index, wmodel="DPH")
-    
-    def load_existing_index(self):
-        """
-        Load an existing Terrier index
-        """
-        if os.path.exists(self.index_path):
+            logger.info("Creating indexer...")
+            indexer = pt.IterDictIndexer(
+                self.index_path, 
+                overwrite=True, 
+                meta=meta_config,
+                blocks=True
+            )
+            
+            logger.info("Starting indexing process...")
+            self.index = indexer.index(cleaned_documents)
+            
+            # Initialize retrieval models
+            logger.info("Initializing retrieval models...")
+            self.retrieval_model = pt.BatchRetrieve(self.index, wmodel="BM25", num_results=20)
+            self.tfidf_model = pt.BatchRetrieve(self.index, wmodel="TF_IDF", num_results=20)
+            self.dph_model = pt.BatchRetrieve(self.index, wmodel="DPH", num_results=20)
+            
+            logger.info(f"Index built successfully with {len(cleaned_documents)} documents")
+            
+            # Try to get index statistics
             try:
-                self.index = pt.IndexFactory.of(self.index_path)
-                self.retrieval_model = pt.BatchRetrieve(self.index, wmodel="BM25")
-                logger.info("Existing index loaded successfully")
-                return True
-            except Exception as e:
-                logger.error(f"Error loading existing index: {e}")
-                return False
-        else:
-            logger.warning(f"Index path {self.index_path} does not exist")
-            return False
-    
-    def search(self, query: str, num_results: int = 10, model: str = "BM25") -> pd.DataFrame:
-        """
-        Search the index for relevant documents
-        
-        Args:
-            query: Search query
-            num_results: Number of results to return
-            model: Retrieval model to use ("BM25", "TF_IDF", "DPH")
+                stats = self.index.getCollectionStatistics()
+                logger.info(f"Index statistics: {stats}")
+            except Exception as stats_e:
+                logger.warning(f"Could not retrieve index statistics: {stats_e}")
             
-        Returns:
-            DataFrame with search results
-        """
-        if self.retrieval_model is None:
-            logger.error("Index not built or loaded")
-            return pd.DataFrame()
-        
-        # Select the appropriate model
-        if model == "TF_IDF" and hasattr(self, 'tfidf_model'):
-            retrieval_model = self.tfidf_model
-        elif model == "DPH" and hasattr(self, 'dph_model'):
-            retrieval_model = self.dph_model
-        else:
-            retrieval_model = self.retrieval_model
-        
-        # Create query DataFrame
-        query_df = pd.DataFrame([{'qid': '1', 'query': query}])
-        
-        # Perform search
-        results = retrieval_model.transform(query_df)
-        
-        # Limit results
-        results = results.head(num_results)
-        
-        # Add document metadata
-        if not results.empty and hasattr(self, 'documents') and self.documents:
-            doc_lookup = {doc['docno']: doc for doc in self.documents}
-            results['title'] = results['docno'].map(lambda x: doc_lookup.get(x, {}).get('title', ''))
-            results['source_file'] = results['docno'].map(lambda x: doc_lookup.get(x, {}).get('source_file', ''))
-            results['chunk_id'] = results['docno'].map(lambda x: doc_lookup.get(x, {}).get('chunk_id', ''))
-        
-        return results
-    
-    def get_document_text(self, docno: str) -> str:
-        """
-        Get the full text of a document by its ID
-        
-        Args:
-            docno: Document ID
-            
-        Returns:
-            Document text
-        """
-        if self.index is None:
-            return ""
-        
-        try:
-            # Get document from index
-            meta_index = self.index.getMetaIndex()
-            docid = self.index.getCollectionStatistics().getNumberOfDocuments()
-            
-            for i in range(docid):
-                if meta_index.getItem("docno", i) == docno:
-                    return meta_index.getItem("text", i)
-            
-            return ""
         except Exception as e:
-            logger.error(f"Error retrieving document {docno}: {e}")
-            return ""
-    
-    def get_query_suggestions(self, partial_query: str) -> List[str]:
-        """
-        Generate query suggestions based on document terms
-        
-        Args:
-            partial_query: Partial query string
+            logger.error(f"Index build failed: {e}")
+            import traceback
+            logger.error(f"Full traceback: {traceback.format_exc()}")
             
-        Returns:
-            List of suggested queries
-        """
-        # This is a simple implementation - you could enhance with more sophisticated methods
-        cybersec_terms = [
-            "malware", "virus", "trojan", "ransomware", "phishing", "firewall",
-            "encryption", "authentication", "authorization", "vulnerability",
-            "exploit", "penetration testing", "incident response", "forensics",
-            "network security", "web security", "cryptography", "ssl", "tls",
-            "intrusion detection", "security policy", "risk assessment",
-            "threat modeling", "secure coding", "access control"
-        ]
-        
-        suggestions = []
-        partial_lower = partial_query.lower()
-        
-        for term in cybersec_terms:
-            if partial_lower in term or term.startswith(partial_lower):
-                suggestions.append(term)
-        
-        return suggestions[:5]  # Return top 5 suggestions
-
-# Example usage and utility functions
-def main():
-    """
-    Example usage of the CybersecurityIRSystem
-    """
-    # Initialize the IR system
-    ir_system = CybersecurityIRSystem()
-    
-    # Check if there are any PDF files in the current directory
-    current_dir = Path(".")
-    pdf_files = list(current_dir.glob("*.pdf"))
-    
-    if pdf_files:
-        print(f"Found {len(pdf_files)} PDF file(s):")
-        for i, pdf_file in enumerate(pdf_files):
-            print(f"{i+1}. {pdf_file.name}")
-        
-        # Use the first PDF file found
-        selected_file = pdf_files[0]
-        print(f"\nProcessing: {selected_file.name}")
-        
-        # Load the document
-        documents = ir_system.load_single_document(str(selected_file), selected_file.stem)
-        
-        if documents:
-            print(f"Loaded {len(documents)} document chunks")
-            
-            # Build the index
-            print("Building index...")
-            ir_system.build_index(documents)
-            
-            # Example searches
-            queries = [
-                "privacy compromise",
-                "white box"
-            ]
-            
-            print("\n" + "="*60)
-            print("SEARCH RESULTS")
-            print("="*60)
-            
-            for query in queries:
-                print(f"\n--- Search Results for: '{query}' ---")
+            # Fallback with larger text field and simpler config
+            logger.info("Attempting fallback indexing...")
+            try:
+                fallback_config = {
+                    'docno': 100,
+                    'text': max(500000, int(max_text_len * 3)),
+                    'title': 300,
+                    'source_file': 500,
+                    'chunk_id': 50,
+                    'doc_id': 50
+                }
                 
-                # Try multiple retrieval models
-                for model_name in ["BM25", "TF_IDF"]:
-                    print(f"\n  Using {model_name} model:")
-                    results = ir_system.search(query, num_results=3, model=model_name)
-                    
-                    if not results.empty:
-                        for idx, row in results.iterrows():
-                            print(f"    Rank {row['rank']}: {row['docno']} (Score: {row['score']:.4f})")
-                            print(f"    Title: {row.get('title', 'N/A')}")
-                            # Get text preview
-                            doc_text = ""
-                            if hasattr(ir_system, 'documents') and ir_system.documents:
-                                for doc in ir_system.documents:
-                                    if doc['docno'] == row['docno']:
-                                        doc_text = doc['text']
-                                        break
+                indexer = pt.IterDictIndexer(
+                    self.index_path, 
+                    overwrite=True, 
+                    meta=fallback_config,
+                    blocks=True
+                )
+                self.index = indexer.index(cleaned_documents)
+                self.retrieval_model = pt.BatchRetrieve(self.index, wmodel="BM25", num_results=20)
+                self.tfidf_model = pt.BatchRetrieve(self.index, wmodel="TF_IDF", num_results=20)  
+                self.dph_model = pt.BatchRetrieve(self.index, wmodel="DPH", num_results=20)
+                logger.info(f"Fallback index built successfully with {len(cleaned_documents)} documents")
+            except Exception as fallback_e:
+                logger.error(f"Fallback index build also failed: {fallback_e}")
+                import traceback
+                logger.error(f"Fallback traceback: {traceback.format_exc()}")
+                self.index = None
 
-                            if doc_text:
-                                query_terms = query.lower().split()
-                                lower_text = doc_text.lower()
+    def search(self, query: str, num_results: int = 10, model: str = "BM25") -> pd.DataFrame:
+        if self.index is None:
+            logger.error("Index not built")
+            return pd.DataFrame()
 
-                                # Search for each term in text and show context
-                                context_found = False
-                                for term in query_terms:
-                                    pos = lower_text.find(term)
-                                    if pos != -1:
-                                        start = max(0, pos - 100)
-                                        end = min(len(doc_text), pos + len(term) + 100)
-                                        context = doc_text[start:end].replace('\n', ' ').strip()
-                                        print(f"    Context: ...{context}...")
-                                        context_found = True
-                                        break
-                                
-                                if not context_found:
-                                    p = doc_text[:300].replace('\n', ' ').strip()
-                                    print(f"    Preview: {p}...")
-                            else:
-                                print("    No results found.")
-                            
-            print(f"\nSystem ready! You can now search the {selected_file.name} document.")
-            print("To search interactively, modify the main function or create a search loop.")
-        
-        else:
-            print(f"Failed to load documents from {selected_file.name}")
-            print("Please check if the file is a valid PDF and not corrupted.")
-    
-    else:
-        print("No PDF files found in the current directory.")
-        print("\nTo use this system:")
-        print("1. Place your cybersecurity book (PDF format) in the current directory")
-        print("2. Or modify the main() function to specify the file path")
-        print("3. Or use load_documents_from_directory() for multiple files")
-        
-        # Show example of how to use with a specific file
-        print("\nExample usage:")
-        print("documents = ir_system.load_single_document('path/to/your/book.pdf', 'Book Title')")
-        print("ir_system.build_index(documents)")
-        print("results = ir_system.search('your search query')")
-
-def interactive_search():
-    """
-    Interactive search function for testing
-    """
-    ir_system = CybersecurityIRSystem()
-    
-    # Try to load existing index first
-    if ir_system.load_existing_index():
-        print("Loaded existing index.")
-    else:
-        print("No existing index found. Please run main() first to build an index.")
-        return
-    
-    print("\n" + "="*50)
-    print("INTERACTIVE SEARCH MODE")
-    print("="*50)
-    print("Enter your search queries (type 'quit' to exit):")
-    
-    while True:
-        query = input("\nSearch: ").strip()
-        
-        if query.lower() in ['quit', 'exit', 'q']:
-            break
+        original_query = query
+        query = self.preprocess_text(query)
         
         if not query:
-            continue
+            logger.error("Invalid or empty query")
+            return pd.DataFrame()
+
+        logger.info(f"Searching for: '{original_query}' -> '{query}'")
+
+        models = {
+            "BM25": self.retrieval_model,
+            "TF_IDF": self.tfidf_model,
+            "DPH": self.dph_model
+        }
+        retriever = models.get(model, self.retrieval_model)
         
-        results = ir_system.search(query, num_results=5)
-        
-        if not results.empty:
-            print(f"\nFound {len(results)} results:")
-            for idx, row in results.iterrows():
-                print(f"\n{row['rank']}. {row['docno']} (Score: {row['score']:.4f})")
+        try:
+            qdf = pd.DataFrame([{'qid': '1', 'query': query}])
+            results = retriever.transform(qdf).head(num_results)
+
+            if not results.empty:
+                # Create lookup dictionary for document metadata
+                doc_lookup = {doc['docno']: doc for doc in self.documents}
+                preview_lookup = getattr(self, 'preview_info', {})
                 
-                # Get document text for preview
-                doc_text = ""
-                if hasattr(ir_system, 'documents') and ir_system.documents:
-                    for doc in ir_system.documents:
-                        if doc['docno'] == row['docno']:
-                            doc_text = doc['text']
-                            break
+                # Add metadata to results
+                results['title'] = results['docno'].map(lambda x: doc_lookup.get(x, {}).get('title', 'Unknown'))
+                results['source_file'] = results['docno'].map(lambda x: doc_lookup.get(x, {}).get('source_file', 'Unknown'))
+                results['chunk_id'] = results['docno'].map(lambda x: doc_lookup.get(x, {}).get('chunk_id', '0'))
+                results['doc_id'] = results['docno'].map(lambda x: doc_lookup.get(x, {}).get('doc_id', '0'))
                 
-                if doc_text:
-                    preview = doc_text[:200].replace('\n', ' ').strip()
-                    print(f"   {preview}...")
-        else:
+                # Add preview information
+                results['original_text'] = results['docno'].map(lambda x: preview_lookup.get(x, {}).get('original_text', ''))
+                results['file_extension'] = results['docno'].map(lambda x: preview_lookup.get(x, {}).get('file_extension', ''))
+                
+                # Sort by score (descending)
+                results = results.sort_values('score', ascending=False)
+                
+                logger.info(f"Found {len(results)} results for query: {original_query}")
+            else:
+                logger.warning(f"No results found for query: {original_query}")
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Search failed for query '{original_query}': {e}")
+            return pd.DataFrame()
+
+    def display_search_results(self, results: pd.DataFrame, show_preview: bool = True):
+        """Display search results with preview"""
+        if results.empty:
             print("No results found.")
-    
-    print("Search session ended.")
+            return
+        
+        print(f"\nFound {len(results)} results:")
+        print("=" * 80)
+        
+        for idx, row in results.iterrows():
+            print(f"\nRank {idx + 1}:")
+            print(f"Document: {row.get('title', 'Unknown')}")
+            print(f"Source: {Path(row.get('source_file', 'Unknown')).name}")
+            print(f"Chunk ID: {row.get('chunk_id', 'Unknown')}")
+            print(f"Score: {row.get('score', 0):.4f}")
+            
+            if show_preview and 'original_text' in row and row['original_text']:
+                print(f"Preview: {row['original_text'][:300]}...")
+            
+            print("-" * 40)
+
+    def get_document_stats(self):
+        """Get statistics about loaded documents"""
+        if not self.documents:
+            return "No documents loaded"
+        
+        stats = {}
+        for doc in self.documents:
+            source = Path(doc['source_file']).name
+            if source not in stats:
+                stats[source] = {'chunks': 0, 'total_chars': 0}
+            stats[source]['chunks'] += 1
+            stats[source]['total_chars'] += len(doc.get('text', ''))
+        
+        print("\nDocument Statistics:")
+        print("=" * 50)
+        for source, info in stats.items():
+            print(f"{source}: {info['chunks']} chunks, {info['total_chars']:,} characters")
+        
+        return stats
 
 if __name__ == "__main__":
-    main()
+    try:
+        ir = CybersecurityIRSystem()
+        
+        # Load documents
+        print("Loading documents...")
+        docs = ir.load_documents_from_directory(".")
+        
+        if docs:
+            print(f"Loaded {len(docs)} document chunks")
+            ir.get_document_stats()
+            
+            # Build index
+            print("\nBuilding index...")
+            ir.build_index(docs)
+            
+            if ir.index is not None:
+                # Test queries
+                queries = ["privacy compromise", "white box", "Bayes-based spam classifiers", "cybersecurity", "malware"]
+                
+                for q in queries:
+                    print(f"\n{'='*60}")
+                    print(f"Query: '{q}'")
+                    print('='*60)
+                    
+                    for model in ["BM25", "TF_IDF"]:
+                        print(f"\n--- Results using {model} ---")
+                        results = ir.search(q, num_results=5, model=model)
+                        
+                        if not results.empty:
+                            ir.display_search_results(results, show_preview=True)
+                        else:
+                            print("No results found")
+            else:
+                print("Failed to build index")
+        else:
+            print("No documents found in directory")
+            
+    except Exception as e:
+        logger.error(f"Main execution failed: {e}")
+        import traceback
+        traceback.print_exc()

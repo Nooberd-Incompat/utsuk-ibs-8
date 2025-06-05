@@ -299,11 +299,11 @@ class CybersecurityIRSystem:
             logger.info("Starting indexing process...")
             self.index = indexer.index(cleaned_documents)
             
-            # Initialize retrieval model
-            logger.info("Initializing BM25 retrieval model...")
-            self.retrieval_model = pt.BatchRetrieve(self.index, wmodel="BM25", num_results=20)
+            # Initialize retrieval model with PL2
+            logger.info("Initializing PL2 retrieval model...")
+            self.retrieval_model = pt.BatchRetrieve(self.index, wmodel="PL2", num_results=20)
             
-            logger.info(f"Index built successfully with {len(cleaned_documents)} documents")
+            logger.info(f"Index built successfully with {len(cleaned_documents)} documents using PL2 weighting model")
             
             # Try to get index statistics
             try:
@@ -336,8 +336,8 @@ class CybersecurityIRSystem:
                     blocks=True
                 )
                 self.index = indexer.index(cleaned_documents)
-                self.retrieval_model = pt.BatchRetrieve(self.index, wmodel="BM25", num_results=20)
-                logger.info(f"Fallback index built successfully with {len(cleaned_documents)} documents")
+                self.retrieval_model = pt.BatchRetrieve(self.index, wmodel="PL2", num_results=20)
+                logger.info(f"Fallback index built successfully with {len(cleaned_documents)} documents using PL2")
             except Exception as fallback_e:
                 logger.error(f"Fallback index build also failed: {fallback_e}")
                 import traceback
@@ -356,7 +356,7 @@ class CybersecurityIRSystem:
             logger.error("Invalid or empty query")
             return pd.DataFrame()
 
-        logger.info(f"Searching for: '{original_query}' -> '{query}'")
+        logger.info(f"Searching with PL2 for: '{original_query}' -> '{query}'")
         
         try:
             qdf = pd.DataFrame([{'qid': '1', 'query': query}])
@@ -449,13 +449,44 @@ class CybersecurityIRSystem:
         
         return stats
 
+    def compare_models(self, query: str, num_results: int = 5):
+        """Compare PL2 with other weighting models for analysis"""
+        if self.index is None:
+            logger.error("Index not built")
+            return
+        
+        models = {
+            'PL2': pt.BatchRetrieve(self.index, wmodel="PL2", num_results=num_results),
+            'BM25': pt.BatchRetrieve(self.index, wmodel="BM25", num_results=num_results),
+            'TF_IDF': pt.BatchRetrieve(self.index, wmodel="TF_IDF", num_results=num_results),
+        }
+        
+        processed_query = self.preprocess_text(query)
+        qdf = pd.DataFrame([{'qid': '1', 'query': processed_query}])
+        
+        print(f"\nModel Comparison for query: '{query}'")
+        print("=" * 80)
+        
+        for model_name, model in models.items():
+            try:
+                results = model.transform(qdf)
+                if not results.empty:
+                    print(f"\n{model_name} Results:")
+                    print(f"Top score: {results['score'].max():.4f}")
+                    print(f"Average score: {results['score'].mean():.4f}")
+                    print(f"Score range: {results['score'].min():.4f} - {results['score'].max():.4f}")
+                else:
+                    print(f"\n{model_name}: No results found")
+            except Exception as e:
+                print(f"\n{model_name}: Error - {e}")
+
 if __name__ == "__main__":
     try:
         ir = CybersecurityIRSystem()
         
         # Load documents
         print("Loading documents...")
-        docs = ir.load_documents_from_directory(".")
+        docs = ir.load_documents_from_directory("./pdfs")
         
         if docs:
             print(f"Loaded {len(docs)} document chunks")
@@ -474,13 +505,16 @@ if __name__ == "__main__":
                     print(f"Query: '{q}'")
                     print('='*60)
                     
-                    print(f"\n--- Results using BM25 ---")
+                    print(f"\n--- Results using PL2 ---")
                     results = ir.search(q, num_results=5)
                         
                     if not results.empty:
                         ir.display_search_results(results, show_preview=True)
                     else:
-                        ("No results found")
+                        print("No results found")
+                    
+                    # Optional: Compare with other models
+                    # ir.compare_models(q, num_results=3)
             else:
                 print("Failed to build index")
         else:

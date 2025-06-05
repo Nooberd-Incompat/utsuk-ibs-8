@@ -78,8 +78,7 @@ class PDFProcessor:
 
 class TextChunker:
     """Handles text chunking for better retrieval"""
-    
-    def __init__(self, chunk_size: int = 500, overlap: int = 50):
+    def __init__(self, chunk_size: int = 550, overlap: int = 50):
         self.chunk_size = chunk_size
         self.overlap = overlap
     
@@ -259,7 +258,7 @@ class RAGSystem:
         else:
             print("No documents were successfully processed.")
     
-    def query(self, question: str, k: int = 5) -> Dict[str, Any]:
+    def query(self, question: str, k: int = 15) -> Dict[str, Any]:
         """Query the RAG system"""
         # Retrieve relevant documents
         retrieved_docs = self.vector_store.search(question, k=k)
@@ -292,7 +291,7 @@ class RAGSystem:
                 'source': doc['source'],
                 'similarity_score': doc['similarity_score'],
                 'chunk_id': doc['chunk_id'],
-                'content_preview': doc['content'][:200] + "..." if len(doc['content']) > 200 else doc['content']
+                'content_preview': doc['content'][:500] + "..." if len(doc['content']) > 500 else doc['content']
             })
         
         return {

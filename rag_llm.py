@@ -26,20 +26,20 @@ class ConfigManager:
     """Manages configuration settings with defaults and validation."""
     
     DEFAULT_CONFIG = {
-        'chunk_size': 300,
-        'overlap_ratio': 0.15,
-        'embedding_model': 'all-MiniLM-L6-v2',
+        'chunk_size': 500,
+        'overlap_ratio': 0.10,
+        'embedding_model': 'all-mpnet-base-v2',
         'use_multiple_models': False,
         'qwen_model_name': 'Qwen-3-14B',
         'base_url': 'http://127.0.0.1:1234/v1',
         'device_map': 'auto',
         'max_context_length': 8192,
-        'retrieval_k': 5,
+        'retrieval_k': 7,
         'embedding_batch_size': 64,
         'history_file': 'conversation_history.json',  # New: JSON file for history
         'generation_params': {
-            'max_new_tokens': 2048,
-            'temperature': 0.7,
+            'max_new_tokens': 3000,
+            'temperature': 0.5,
             'top_p': 0.9,
             'do_sample': True
         },
@@ -188,7 +188,7 @@ class AdaptiveChunker:
 class EnhancedVectorStore:
     """Optimized vector store for document embeddings and search."""
 
-    def __init__(self, model_name: str = 'all-MiniLM-L6-v2', batch_size: int = 64):
+    def __init__(self, model_name: str = 'all-mpnet-base-v2', batch_size: int = 64):
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         if self.device == 'cpu':
             logger.warning("No GPU available, falling back to CPU for embeddings. Performance may be slower.")
@@ -278,7 +278,7 @@ class EnhancedVectorStore:
         """Calculates bonus score based on keyword overlap."""
         query_words = set(query.lower().split())
         content_words = set(content.lower().split())
-        return len(query_words.intersection(content_words)) * 0.05
+        return len(query_words.intersection(content_words)) * 0.08
 
 class Qwen14BGenerator:
     """Handles text generation with Qwen-3 14B via LM Studio."""

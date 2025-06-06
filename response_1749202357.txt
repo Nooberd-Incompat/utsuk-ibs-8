@@ -1,0 +1,27 @@
+
+📋 Question: what are attacks? give examples?
+🤖 Answer: <think>
+Okay, the user asked, "what are attacks? give examples?" based on the context provided.
+
+First, I need to check the context sources for any mention of attacks and their examples. Looking at Source 1, Chunk 159 talks about threats and attack vectors but doesn't explicitly define attacks with examples. Then, in Source 2, Chunk 720 mentions that "attacks are the realization of some specific threat..." and gives an example of SQL injection leading to information disclosure. The example includes probing web pages with a vulnerability scanner and injecting SQL commands to access confidential data like credit card info.
+
+I should make sure there's no other context. Source 1 does mention social engineering and malware as methods, but the actual attack example is in Source 2. So the answer should include that definition from Source 2 and the SQL injection example. Also, note that the user might be interested in understanding both the definition and practical examples of attacks as per the given sources.
+</think>
+
+An **attack** is defined as the realization of a specific threat that impacts the confidentiality, integrity, accountability, or availability of a computational resource [Source 2: filename, Chunk 720].  
+
+### Example of an Attack:
+A common example is **SQL injection**, where a threat agent exploits vulnerabilities in web application inputs to execute arbitrary SQL commands. The process involves:  
+1. Probing the application's web pages using a vulnerability scanner.  
+2. Manually injecting malicious SQL code into input fields (e.g., login forms or search bars).  
+3. Altering the SQL query to bypass authentication or extract sensitive data, such as credit card information stored in the database [Source 2: filename, Chunk 720].  
+
+This attack highlights how vulnerabilities in application logic can be exploited to compromise data confidentiality and integrity.
+🎯 Confidence: 0.55
+
+📚 Sources:
+  1. Tony UcedaVelez, Marco M. Morana - Risk Centric Threat Modeling_ Process for Attack Simulation and Threat Analysis-Wiley (2015).pdf (Chunk 159, Score: 0.673): A simple example would be for an attacker to use social engineering and malware compromise on a host to steal the user s credentials to try and exploit the application business logic post-authenticati...
+  2. Tony UcedaVelez, Marco M. Morana - Risk Centric Threat Modeling_ Process for Attack Simulation and Threat Analysis-Wiley (2015).pdf (Chunk 720, Score: 0.644): A threat represents a potential of a threat agent attacking a target and therefore are a possibility for an attack. A standard definition of attacks is covered in NISP 800-28v2, Guidelines on Active C...
+  3. Tony UcedaVelez, Marco M. Morana - Risk Centric Threat Modeling_ Process for Attack Simulation and Threat Analysis-Wiley (2015).pdf (Chunk 657, Score: 0.633): As minimum requirement, the description of the attack scenario needs to be comprehensive and detailed and to include the description of the attacking tools (e. g. cyber-crime toolkits), attacking tech...
+  4. Tony UcedaVelez, Marco M. Morana - Risk Centric Threat Modeling_ Process for Attack Simulation and Threat Analysis-Wiley (2015).pdf (Chunk 371, Score: 0.624): Since an attack consists of realizing a threat to produce a negative impact (the goal of the attacker), modeling how this attack takes place is critical to determine if such attack leads to a successf...
+  5. Tony UcedaVelez, Marco M. Morana - Risk Centric Threat Modeling_ Process for Attack Simulation and Threat Analysis-Wiley (2015).pdf (Chunk 160, Score: 0.622): By matching the characteristics of the application asset to the potential threats affecting them, it is possible to put together a threat profile for the application. If a web application is already o...

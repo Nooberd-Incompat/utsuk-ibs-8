@@ -1,0 +1,106 @@
+rules:
+  # SQL Injection Rules
+  - id: sql-injection-format-string
+    pattern: $DB.execute(f"... {$VAR} ...")
+    message: "SQL injection via f-string formatting"
+    severity: HIGH
+    languages: [python]
+
+  - id: sql-injection-basic
+    pattern: $DB.query($QUERY + $INPUT)
+    message: "SQL injection vulnerability detected"
+    severity: HIGH
+    languages: [python]
+
+  # Command Injection Rules  
+  - id: command-injection-os-system
+    pattern: os.system($INPUT)
+    message: "Command injection vulnerability"
+    severity: CRITICAL
+    languages: [python]
+
+  - id: command-injection-subprocess
+    pattern: subprocess.call($INPUT, shell=True)
+    message: "Command injection via subprocess"
+    severity: CRITICAL
+    languages: [python]
+
+  - id: code-injection-eval
+    pattern: eval($INPUT)
+    message: "Code injection via eval()"
+    severity: CRITICAL
+    languages: [python]
+
+  # Authentication Issues
+  - id: hardcoded-password
+    patterns:
+      - pattern: password = "..."
+      - pattern: secret_key = "..."
+      - pattern: api_key = "..."
+    message: "Hardcoded credentials detected"
+    severity: HIGH
+    languages: [python]
+
+  - id: jwt-no-verification
+    pattern: jwt.decode($TOKEN, verify=False)
+    message: "JWT signature verification disabled"
+    severity: HIGH
+    languages: [python]
+
+  # Cryptographic Issues
+  - id: weak-hash-md5
+    pattern: hashlib.md5($DATA)
+    message: "MD5 is cryptographically weak"
+    severity: MEDIUM
+    languages: [python]
+
+  - id: weak-hash-sha1
+    pattern: hashlib.sha1($DATA)
+    message: "SHA-1 is cryptographically weak"
+    severity: MEDIUM
+    languages: [python]
+
+  - id: insecure-random
+    patterns:
+      - pattern: random.random()
+      - pattern: random.randint(...)
+    message: "Cryptographically insecure random generation"
+    severity: MEDIUM
+    languages: [python]
+
+  # Data Exposure
+  - id: debug-mode-enabled
+    patterns:
+      - pattern: DEBUG = True
+      - pattern: app.debug = True
+    message: "Debug mode enabled in production"
+    severity: HIGH
+    languages: [python]
+
+  - id: sensitive-logging
+    patterns:
+      - pattern: print($PASSWORD)
+      - pattern: logging.info(f"... {$PASSWORD} ...")
+    message: "Sensitive data exposed in logs"
+    severity: HIGH
+    languages: [python]
+
+  # Input Validation
+  - id: path-traversal
+    pattern: open($USER_PATH, ...)
+    message: "Path traversal vulnerability"
+    severity: HIGH
+    languages: [python]
+
+  - id: unsafe-deserialization
+    pattern: pickle.loads($USER_DATA)
+    message: "Unsafe deserialization with pickle"
+    severity: CRITICAL
+    languages: [python]
+
+  # Network Security
+  - id: ssl-verification-disabled
+    pattern: requests.get($URL, verify=False)
+    message: "SSL certificate verification disabled"
+    severity: HIGH
+    languages: [python]

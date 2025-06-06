@@ -329,7 +329,8 @@ class Qwen14BGenerator:
         system_prompt = system_prompt or (
             "You are a helpful AI assistant that answers questions based on provided context. "
             "Provide accurate, detailed responses using only the given context. "
-            "Cite sources explicitly in your response using the format [Source X: filename, Chunk Y]. "
+            "Cite sources explicitly in your response using the format [Source X: filename]. "
+            "If you have cited a source already, no need to cite it again "
             "If the context doesn't contain enough information, say so clearly."
         )
         

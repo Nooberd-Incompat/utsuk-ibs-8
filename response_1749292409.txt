@@ -1,0 +1,23 @@
+
+📋 Question: What kind of privacy attacks are most common in mobile crowdsourcing platforms?
+🤖 Answer: Unfortunately, the provided context does not mention anything specific about mobile crowdsourcing platforms. However, it does mention that despite the ongoing progress in native security mechanisms, numerous researches and case studies have shown that mobile devices are vulnerable to various types of attacks.
+
+Although the context doesn't provide a direct answer to your question about mobile crowdsourcing platforms, I can suggest some common privacy attacks found in mobile ecosystems, as mentioned in the provided ebook. These include:
+
+1.  Malware attacks: Mobile malware can steal sensitive information such as passwords and credit card numbers.
+2.   Eavesdropping attacks: Hackers can intercept data transmitted over mobile networks using techniques like eavesdropping.
+3.   Man-in-the-Middle (MitM) attacks: Attackers can intercept communication between a user's device and the intended recipient, allowing them to access sensitive information.
+
+These types of attacks are commonly found in various mobile ecosystems, including those that involve crowdsourcing platforms (although the context doesn't explicitly mention this).
+
+Please note that without more specific information about mobile crowdsourcing platforms, it's challenging to provide an exhaustive list of common privacy attacks.
+🎯 Confidence: 1.00
+
+📚 Sources:
+  1. (Series in Security, Privacy and Trust) Georgios Kambourakis, Asaf Shabtai, Constantinos Kolias, Dimitrios Damopoulos - Intrusion Detection and Prevention for Mobile Ecosystems-CRC Press (2017).pdf (Chunk 13, Score: 1.480): . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 17 1. 6 Conclusions. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . ....
+  2. (Series in Security, Privacy and Trust) Georgios Kambourakis, Asaf Shabtai, Constantinos Kolias, Dimitrios Damopoulos - Intrusion Detection and Prevention for Mobile Ecosystems-CRC Press (2017).pdf (Chunk 9, Score: 1.480): From an end-user perspective, the unprecedented advantages these devices oﬀer revolve not only around their high mobility, but also extend to their ease of use and the plethora of their applications. ...
+  3. Shabnam Sodagari - Privacy and Security for Mobile Crowdsourcing (River Publishers Series in Digital Security and Forensics)-River Publishers (2023).pdf (Chunk 6, Score: 1.320): 39 Table 4. 1 Secure edge- and fog-assisted MCS. . . . . . . . . . 44 Table 4. 2 Vehicular MCS security and privacy. . . . . . . . . . 47 Table 5. 1 Overview of blockchain-based crowdsourcing privacy ...
+  4. David Lee Kuo Chuen, Robert H. Deng - Handbook of Blockchain, Digital Finance, and Inclusion, Volume 2_ ChinaTech, Mobile Security, and Distributed Ledger. 2-Academic Press (2018).pdf (Chunk 533, Score: 1.320): If our industry is to recapture the trust of the investing public we need to ﬂoat all boats in society. Technology, as David and Robert so ably demonstrate, is a wonderful tool for doing so. Paul Smit...
+  5. (Series in Security, Privacy and Trust) Georgios Kambourakis, Asaf Shabtai, Constantinos Kolias, Dimitrios Damopoulos - Intrusion Detection and Prevention for Mobile Ecosystems-CRC Press (2017).pdf (Chunk 386, Score: 1.320): Monitored events: The events in these systems may be diﬀerent from each other. To illustrate, events in CPS environments are regularly or habitually automated as well as time-driven in a closed-loop s...
+  6. (Series in Security, Privacy and Trust) Georgios Kambourakis, Asaf Shabtai, Constantinos Kolias, Dimitrios Damopoulos - Intrusion Detection and Prevention for Mobile Ecosystems-CRC Press (2017).pdf (Chunk 10, Score: 1.320): The book at hand comprises a number of state-of-the-art contributions from both scientists and practitioners working in intrusion detection and prevention for mobile networks, services, and devices. I...
+  7. Yang Xiao - Security in Distributed, Grid, Mobile, and Pervasive Computing-Auerbach Publications (2007).pdf (Chunk 444, Score: 1.240): Denial of service in sensor networks. Computer, 35(10): 54 62, 2002. Wireless Sensor Network Security: A Survey 409 89. Y. Xi, L. Schwiebert, and W. Shi. Preserving privacy in monitoring-based wireles...

@@ -26,21 +26,21 @@ class ConfigManager:
     """Manages configuration settings with defaults and validation."""
     
     DEFAULT_CONFIG = {
-        'chunk_size': 300,
-        'overlap_ratio': 0.15,
-        'embedding_model': 'all-MiniLM-L6-v2',
+        'chunk_size': 500,
+        'overlap_ratio': 0.10,
+        'embedding_model': 'all-mpnet-base-v2',
         'use_multiple_models': False,
-        'qwen_model_name': 'Qwen-3-14B',
+        'llama_model_name': 'llama-3.2',  # Changed from qwen_model_name
         'base_url': 'http://127.0.0.1:1234/v1',
         'device_map': 'auto',
         'max_context_length': 8192,
-        'retrieval_k': 5,
+        'retrieval_k': 7,
         'embedding_batch_size': 64,
-        'history_file': 'conversation_history.json',  # New: JSON file for history
+        'history_file': 'conversation_history.json',
         'generation_params': {
-            'max_new_tokens': 2048,
-            'temperature': 0.7,
-            'top_p': 0.9,
+            'max_new_tokens': 3000,
+            'temperature': 0.7,  # Adjusted for Llama
+            'top_p': 0.95,      # Adjusted for Llama
             'do_sample': True
         },
         'include_prompt': False
@@ -188,7 +188,7 @@ class AdaptiveChunker:
 class EnhancedVectorStore:
     """Optimized vector store for document embeddings and search."""
 
-    def __init__(self, model_name: str = 'all-MiniLM-L6-v2', batch_size: int = 64):
+    def __init__(self, model_name: str = 'all-mpnet-base-v2', batch_size: int = 64):
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         if self.device == 'cpu':
             logger.warning("No GPU available, falling back to CPU for embeddings. Performance may be slower.")
@@ -278,13 +278,13 @@ class EnhancedVectorStore:
         """Calculates bonus score based on keyword overlap."""
         query_words = set(query.lower().split())
         content_words = set(content.lower().split())
-        return len(query_words.intersection(content_words)) * 0.05
+        return len(query_words.intersection(content_words)) * 0.08
 
-class Qwen14BGenerator:
-    """Handles text generation with Qwen-3 14B via LM Studio."""
+class Llama32Generator:  # Renamed from Qwen14BGenerator
+    """Handles text generation with Llama 3.2 via LM Studio."""
 
     def __init__(self, config: Dict):
-        self.model_path = config['qwen_model_name']
+        self.model_path = config['llama_model_name']  # Updated config key
         self.base_url = config['base_url']
         self.max_context_length = config['max_context_length']
         self.temperature = config['generation_params']['temperature']
@@ -327,23 +327,8 @@ class Qwen14BGenerator:
                          history: List[Dict[str, str]] = None) -> str:
         """Creates optimized RAG prompt with source citation instructions."""
         system_prompt = system_prompt or (
-            "You are a cybersecurity expert and educator with deep knowledge of information security, ethical hacking, network security, and security best practices. "
-            "- Always prioritize ethical and legal approaches to cybersecurity"
-            "- Explain concepts clearly for different skill levels"
-            "- Provide practical, actionable guidance"
-            "- Include real-world context and examples"
-            "- Emphasize defense over offense"
-            "- Do not provide specific instructions for malicious attacks"
-            "- Focus on defensive strategies and threat awareness"
-            "- Explain vulnerabilities in educational context only"
-            "- Redirect harmful requests toward legitimate security practices"
-            "- Structure responses with clear sections"
-            "- Include step-by-step explanations when appropriate"
-            "- Provide relevant examples and case studies"
-            "- Suggest additional resources for deeper learning"
-            "- Balance technical depth with accessibility"
-            "Encourage continuous learning and professional development"
-            "Emphasize the importance of authorization and consent"
+            "You are a helpful AI assistant that answers questions based on provided context. "
+            "Provide accurate, detailed responses using only the given context. "
             "Cite sources explicitly in your response using the format [Source X: filename]. "
             "If you have cited a source already, no need to cite it again "
             "If the context doesn't contain enough information, say so clearly."
@@ -407,8 +392,8 @@ class Qwen14BGenerator:
             logger.error(f"Generation error: {str(e)}")
             return f"Error generating response: {str(e)}"
 
-class ImprovedRAGWithQwen14B:
-    """Enhanced RAG system with Qwen-3 14B integration."""
+class ImprovedRAGWithLlama32:  # Renamed from ImprovedRAGWithQwen14B
+    """Enhanced RAG system with Llama 3.2 integration."""
 
     def __init__(self, pdf_directory: str, config: Dict[str, Any] = None):
         self.pdf_directory = Path(pdf_directory)
@@ -416,18 +401,40 @@ class ImprovedRAGWithQwen14B:
         self.pdf_processor = OptimizedPDFProcessor()
         self.chunker = AdaptiveChunker(self.config['chunk_size'], self.config['overlap_ratio'])
         self.vector_store = EnhancedVectorStore(self.config['embedding_model'], self.config['embedding_batch_size'])
-        self.qwen_generator = Qwen14BGenerator(self.config)
+        self.llama_generator = Llama32Generator(self.config)  # Updated from qwen_generator
         self.conversation_history = []
         self.history_file = Path(self.config['history_file'])
         self._load_conversation_history()
+
+    def _generate_conversation_title(self, question: str, timestamp: str) -> str:
+        """Generates a unique title for the conversation using question and timestamp."""
+        # Extract first sentence or up to 50 chars from question
+        base_title = question.split('.')[0][:50].strip()
+        if len(base_title) < 10:  # If title too short, use more of the question
+            base_title = question[:50].strip()
+        # Add timestamp to ensure uniqueness
+        unique_suffix = timestamp.replace(' ', '_').replace(':', '-')
+        return f"{base_title}_{unique_suffix}"
 
     def _load_conversation_history(self):
         """Loads conversation history from JSON file."""
         if self.history_file.exists():
             try:
                 with open(self.history_file, 'r', encoding='utf-8') as f:
-                    self.conversation_history = json.load(f)
-                logger.info(f"Loaded {len(self.conversation_history)} entries from {self.history_file}")
+                    conversations = json.load(f)
+                # Convert dict to list format while preserving titles
+                self.conversation_history = [
+                    {
+                        'title': title,
+                        'question': data['question'],
+                        'answer': data['answer'],
+                        'sources': data['sources'],
+                        'confidence': data['confidence'],
+                        'timestamp': data['timestamp']
+                    }
+                    for title, data in conversations.items()
+                ]
+                logger.info(f"Loaded {len(self.conversation_history)} titled conversations from {self.history_file}")
             except json.JSONDecodeError:
                 logger.error(f"Invalid JSON in {self.history_file}, initializing empty history")
                 self.conversation_history = []
@@ -439,11 +446,22 @@ class ImprovedRAGWithQwen14B:
             self.conversation_history = []
 
     def _save_conversation_history(self):
-        """Saves conversation history to JSON file."""
+        """Saves conversation history to JSON file using existing titles."""
         try:
+            conversations = {
+                entry['title']: {
+                    'question': entry['question'],
+                    'answer': entry['answer'],
+                    'sources': entry['sources'],
+                    'confidence': entry['confidence'],
+                    'timestamp': entry['timestamp']
+                }
+                for entry in self.conversation_history
+            }
+            
             with open(self.history_file, 'w', encoding='utf-8') as f:
-                json.dump(self.conversation_history, f, indent=2, ensure_ascii=False)
-            logger.info(f"Saved {len(self.conversation_history)} entries to {self.history_file}")
+                json.dump(conversations, f, indent=2, ensure_ascii=False)
+            logger.info(f"Saved {len(conversations)} titled conversations to {self.history_file}")
         except Exception as e:
             logger.error(f"Error saving {self.history_file}: {str(e)}")
 
@@ -515,12 +533,12 @@ class ImprovedRAGWithQwen14B:
 
     def query(self, question: str, k: int = None, stream: bool = False,
               system_prompt: Optional[str] = None) -> Dict[str, Any]:
-        """Executes query with Qwen-3 14B, including source citations."""
+        """Executes query with Llama 3.2, including source citations."""
         k = k or self.config['retrieval_k']
-        if not self.qwen_generator.model:
+        if not self.llama_generator.model:
             return {
                 'question': question,
-                'answer': "Qwen-3 14B model unavailable.",
+                'answer': "Llama 3.2 model unavailable.",
                 'sources': [],
                 'confidence': 0.0
             }
@@ -539,9 +557,9 @@ class ImprovedRAGWithQwen14B:
             context = context[:self.config['max_context_length']]
             logger.warning(f"Context truncated to {self.config['max_context_length']} characters")
 
-        prompt = self.qwen_generator.create_rag_prompt(question, context, system_prompt, self.conversation_history)
+        prompt = self.llama_generator.create_rag_prompt(question, context, system_prompt, self.conversation_history)
         logger.info("Generating response...")
-        answer = self.qwen_generator.generate(
+        answer = self.llama_generator.generate(
             prompt,
             max_tokens=self.config['generation_params']['max_new_tokens'],
             temperature=self.config['generation_params']['temperature']
@@ -549,12 +567,16 @@ class ImprovedRAGWithQwen14B:
 
         confidence = self._calculate_answer_confidence(retrieved_docs, answer)
         sources = self._prepare_sources(retrieved_docs)
+        timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
+        title = self._generate_conversation_title(question, timestamp)
+        
         self.conversation_history.append({
+            'title': title,
             'question': question,
             'answer': answer,
             'sources': [doc['source'] for doc in retrieved_docs],
             'confidence': confidence,
-            'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
+            'timestamp': timestamp
         })
         self._save_conversation_history()
 
@@ -611,46 +633,19 @@ class ImprovedRAGWithQwen14B:
 
 def main():
     """Main function for running the RAG system."""
-
-    # === Chat selection helper ===
-    def select_conversation() -> str:
-        conversation_dir = Path("conversations")
-        conversation_dir.mkdir(exist_ok=True)
-        existing_chats = sorted(conversation_dir.glob("chat_*.json"))
-
-        if existing_chats:
-            print("\nAvailable Conversations:")
-            for idx, file in enumerate(existing_chats):
-                print(f"  {idx+1}. {file.stem}")
-            print("  0. Start a new conversation")
-            try:
-                choice = int(input("\nSelect a conversation number (or 0 for new): ").strip())
-                if choice == 0:
-                    name = input("Enter name for new conversation (or leave empty to auto-generate): ").strip()
-                    if not name:
-                        name = f"chat_{int(time.time())}"
-                    return str(conversation_dir / f"{name}.json")
-                elif 1 <= choice <= len(existing_chats):
-                    return str(existing_chats[choice - 1])
-            except Exception:
-                print("Invalid input. Defaulting to new conversation.")
-        return str(conversation_dir / f"chat_{int(time.time())}.json")
-    
-    parser = argparse.ArgumentParser(description="Qwen-3 14B RAG System")
+    parser = argparse.ArgumentParser(description="Llama 3.2 RAG System")  # Updated description
     parser.add_argument("--mode", choices=["interactive", "test", "benchmark", "demo"],
                         default="interactive", help="Mode to run")
     parser.add_argument("--pdf-dir", default="./pdfs", help="PDF directory path")
     parser.add_argument("--history-file", default="conversation_history.json", help="JSON file for conversation history")
     args = parser.parse_args()
 
-    selected_history_file = select_conversation()
-    config = ConfigManager.get_config({'history_file': selected_history_file})
-    rag = ImprovedRAGWithQwen14B(args.pdf_dir, config)
+    config = ConfigManager.get_config({'history_file': args.history_file})
+    rag = ImprovedRAGWithLlama32(args.pdf_dir, config)  # Updated class name
 
     if args.mode == "interactive":
-        logger.info(f"\n💬 Active Conversation: {Path(selected_history_file).stem}")
         rag.load_pdfs()
-        logger.info("\n" + "="*60 + "\n🤖 QWEN-3 14B RAG System Ready!\n" + "="*60)
+        logger.info("\n" + "="*60 + "\n🤖 LLAMA 3.2 RAG System Ready!\n" + "="*60)  # Updated message
         while True:
             question = input("\nYour question (or 'quit' to exit): ").strip()
             if question.lower() in ['quit', 'exit', 'q']:

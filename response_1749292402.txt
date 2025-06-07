@@ -1,0 +1,26 @@
+
+📋 Question: Is there a practical example from the 'Zhang, Yan' book on wireless mesh security that explains physical-layer defense?
+🤖 Answer: Unfortunately, I couldn't find any information about a book by Zhang, Yan on wireless mesh security. The provided conversation history does not mention this specific book or author.
+
+However, based on general knowledge, I can provide an explanation of physical-layer security in mobile networks. Physical-layer security refers to the use of physical properties of a communication channel to prevent eavesdropping and intercepting of data transmitted over that channel. This type of security is often used in wireless communication systems, such as Wi-Fi and cellular networks.
+
+Examples of physical-layer security measures include:
+
+1. Frequency Hopping: Switching between different frequencies to prevent interception.
+2. Direct Sequence Spread Spectrum (DSSS): Spreading the signal across a wide frequency range to make it difficult to intercept.
+3. Adaptive Frequency Hopping (AFH): Automatically switching between frequencies to evade detection by eavesdroppers.
+4. Beamforming: Focusing the signal in a specific direction to reduce interference and increase security.
+
+These measures can be used in mobile networks to secure communication channels, but they are not specifically mentioned in the provided context.
+
+If you have any more information about the book or author, I'd be happy to try and help further.
+🎯 Confidence: 1.00
+
+📚 Sources:
+  1. (Series in Security, Privacy and Trust) Georgios Kambourakis, Asaf Shabtai, Constantinos Kolias, Dimitrios Damopoulos - Intrusion Detection and Prevention for Mobile Ecosystems-CRC Press (2017).pdf (Chunk 9, Score: 1.800): From an end-user perspective, the unprecedented advantages these devices oﬀer revolve not only around their high mobility, but also extend to their ease of use and the plethora of their applications. ...
+  2. (Series in Security, Privacy and Trust) Georgios Kambourakis, Asaf Shabtai, Constantinos Kolias, Dimitrios Damopoulos - Intrusion Detection and Prevention for Mobile Ecosystems-CRC Press (2017).pdf (Chunk 6, Score: 1.640): Asaf has published over 70 refereed papers in leading journals and conferences. In addition, he has coauthored a book on information leakage detection and prevention. Asaf earned a BSc in mathematics ...
+  3. (Series in Security, Privacy and Trust) Georgios Kambourakis, Asaf Shabtai, Constantinos Kolias, Dimitrios Damopoulos - Intrusion Detection and Prevention for Mobile Ecosystems-CRC Press (2017).pdf (Chunk 10, Score: 1.560): The book at hand comprises a number of state-of-the-art contributions from both scientists and practitioners working in intrusion detection and prevention for mobile networks, services, and devices. I...
+  4. David Lee Kuo Chuen, Robert H. Deng - Handbook of Blockchain, Digital Finance, and Inclusion, Volume 2_ ChinaTech, Mobile Security, and Distributed Ledger. 2-Academic Press (2018).pdf (Chunk 533, Score: 1.480): If our industry is to recapture the trust of the investing public we need to ﬂoat all boats in society. Technology, as David and Robert so ably demonstrate, is a wonderful tool for doing so. Paul Smit...
+  5. Yang Xiao - Security in Distributed, Grid, Mobile, and Pervasive Computing-Auerbach Publications (2007).pdf (Chunk 444, Score: 1.400): Denial of service in sensor networks. Computer, 35(10): 54 62, 2002. Wireless Sensor Network Security: A Survey 409 89. Y. Xi, L. Schwiebert, and W. Shi. Preserving privacy in monitoring-based wireles...
+  6. (Series in Security, Privacy and Trust) Georgios Kambourakis, Asaf Shabtai, Constantinos Kolias, Dimitrios Damopoulos - Intrusion Detection and Prevention for Mobile Ecosystems-CRC Press (2017).pdf (Chunk 13, Score: 1.400): . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 17 1. 6 Conclusions. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . ....
+  7. (Series in Security, Privacy and Trust) Georgios Kambourakis, Asaf Shabtai, Constantinos Kolias, Dimitrios Damopoulos - Intrusion Detection and Prevention for Mobile Ecosystems-CRC Press (2017).pdf (Chunk 386, Score: 1.320): Monitored events: The events in these systems may be diﬀerent from each other. To illustrate, events in CPS environments are regularly or habitually automated as well as time-driven in a closed-loop s...

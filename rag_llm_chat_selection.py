@@ -1,4 +1,6 @@
+import asyncio
 import os
+import sys
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 import re
@@ -13,10 +15,15 @@ from sentence_transformers import SentenceTransformer
 from openai import OpenAI
 import logging
 import time
-import argparse
-import torch
-from torch.cuda.amp import autocast
 import json
+import subprocess
+import streamlit as st
+from torch import autocast
+import torch
+
+# Fix asyncio on Windows
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -36,7 +43,8 @@ class ConfigManager:
         'max_context_length': 8192,
         'retrieval_k': 5,
         'embedding_batch_size': 64,
-        'history_file': 'conversation_history.json',  # New: JSON file for history
+        'history_file': 'conversation_history',
+        'upload_dir': 'uploads',
         'generation_params': {
             'max_new_tokens': 2048,
             'temperature': 0.7,
@@ -66,8 +74,10 @@ class ConfigManager:
             raise ValueError("Retrieval k must be positive")
         if config['embedding_batch_size'] < 1:
             raise ValueError("Embedding batch size must be positive")
-        if not config['history_file'].endswith('.json'):
-            raise ValueError("History file must have a .json extension")
+        if config['history_file'].endswith('.json'):
+            config['history_file'] = config['history_file'][:-5]
+        if not Path(config['upload_dir']).is_dir():
+            Path(config['upload_dir']).mkdir(exist_ok=True)
 
 class OptimizedPDFProcessor:
     """Processes PDF files with optimized text extraction."""
@@ -207,7 +217,7 @@ class EnhancedVectorStore:
         try:
             for i in range(0, len(texts), self.batch_size):
                 batch = texts[i:i + self.batch_size]
-                with autocast():
+                with autocast(device_type="cuda"):
                     batch_embeddings = self.embedder.encode(
                         batch,
                         batch_size=self.batch_size,
@@ -355,6 +365,8 @@ class Qwen14BGenerator:
             current_length = 0
             for entry in reversed(history[-5:]):
                 summary = f"Q: {entry['question']}\nA: {entry['answer'][:100] + '...' if len(entry['answer']) > 100 else entry['answer']}\n"
+                if 'semgrep_findings' in entry:
+                    summary += f"Semgrep Findings: {len(entry['semgrep_findings'])} issues detected\n"
                 if current_length + len(summary) <= max_history_length:
                     history_text = summary + history_text
                     current_length += len(summary)
@@ -366,11 +378,9 @@ class Qwen14BGenerator:
             last_topic = history[-1]['question'].lower()
             if 'pii' in last_topic or 'personally identifiable information' in last_topic:
                 resolved_question = re.sub(r'\bit\b', 'PII', question, flags=re.IGNORECASE)
-        # Fixed: Proper return statement
         prompt = (system_prompt + "\n\nContext:\n" + context + "\n\n" +
                  ("Conversation History:\n" + history_text if history_text else "") +
                  "Question: " + resolved_question + "\nAnswer:")
-
         return prompt
 
     def generate(self, prompt: str, max_tokens: int = 2048, temperature: Optional[float] = None) -> str:
@@ -408,7 +418,7 @@ class Qwen14BGenerator:
             return f"Error generating response: {str(e)}"
 
 class ImprovedRAGWithQwen14B:
-    """Enhanced RAG system with Qwen-3 14B integration."""
+    """Enhanced RAG system with Qwen-3 14B and Semgrep integration."""
 
     def __init__(self, pdf_directory: str, config: Dict[str, Any] = None):
         self.pdf_directory = Path(pdf_directory)
@@ -418,7 +428,9 @@ class ImprovedRAGWithQwen14B:
         self.vector_store = EnhancedVectorStore(self.config['embedding_model'], self.config['embedding_batch_size'])
         self.qwen_generator = Qwen14BGenerator(self.config)
         self.conversation_history = []
-        self.history_file = Path(self.config['history_file'])
+        self.history_file = Path(f"{self.config['history_file']}.json")
+        self.upload_dir = Path(self.config['upload_dir'])
+        self.upload_dir.mkdir(exist_ok=True)
         self._load_conversation_history()
 
     def _load_conversation_history(self):
@@ -513,28 +525,87 @@ class ImprovedRAGWithQwen14B:
                     f"Chunk size range: {min(doc['word_count'] for doc in documents)} - "
                     f"{max(doc['word_count'] for doc in documents)} words")
 
-    def query(self, question: str, k: int = None, stream: bool = False,
-              system_prompt: Optional[str] = None) -> Dict[str, Any]:
-        """Executes query with Qwen-3 14B, including source citations."""
+    def scan_code_with_semgrep(self, code_content: str, file_extension: str, rules: str = "auto") -> List[Dict]:
+        """Scans uploaded code with Semgrep and returns findings."""
+        try:
+            timestamp = int(time.time())
+            temp_file = self.upload_dir / f"uploaded_code_{timestamp}.{file_extension}"
+            with open(temp_file, 'w', encoding='utf-8') as f:
+                f.write(code_content)
+
+            logger.info(f"Running Semgrep scan on {temp_file} with rules: {rules}")
+            result = subprocess.run(
+                ["semgrep", "--config", rules, "--json", str(temp_file)],
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                errors='replace',
+                check=False
+            )
+
+            if result.returncode != 0:
+                logger.error(f"Semgrep failed with exit code {result.returncode}: {result.stderr}")
+                temp_file.unlink()
+                return [{'error': f"Semgrep scan failed: {result.stderr}"}]
+
+            findings = []
+            try:
+                semgrep_output = json.loads(result.stdout)
+                for finding in semgrep_output.get('results', []):
+                    findings.append({
+                        'rule_id': finding.get('check_id', 'unknown'),
+                        'message': finding.get('extra', {}).get('message', ''),
+                        'severity': finding.get('extra', {}).get('severity', 'UNKNOWN'),
+                        'file_path': finding.get('path', str(temp_file)),
+                        'line': finding.get('start', {}).get('line', 0),
+                        'code_snippet': finding.get('extra', {}).get('lines', ''),
+                        'cwe': finding.get('extra', {}).get('metadata', {}).get('cwe', []),
+                        'owasp': finding.get('extra', {}).get('metadata', {}).get('owasp', [])
+                    })
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse Semgrep JSON output: {str(e)}")
+                findings.append({'error': f"Failed to parse Semgrep output: {str(e)}"})
+
+            temp_file.unlink()
+            logger.info(f"Semgrep scan completed: {len(findings)} issues found")
+            return findings
+
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Semgrep scan failed: {e.stderr}")
+            temp_file.unlink() if temp_file.exists() else None
+            return [{'error': f"Semgrep scan failed: {e.stderr}"}]
+        except Exception as e:
+            logger.error(f"Semgrep scan failed: {str(e)}")
+            temp_file.unlink() if temp_file.exists() else None
+            return [{'error': f"Semgrep scan failed: {str(e)}"}]
+
+    def query(self, question: str, k: int = None, stream: bool = True,
+              system_prompt: Optional[str] = None, code_content: Optional[str] = None,
+              file_extension: Optional[str] = None) -> Dict[str, Any]:
+        """Executes query with Qwen-3 14B, including Semgrep findings if code is provided."""
         k = k or self.config['retrieval_k']
         if not self.qwen_generator.model:
             return {
                 'question': question,
                 'answer': "Qwen-3 14B model unavailable.",
                 'sources': [],
-                'confidence': 0.0
+                'confidence': 0.0,
+                'semgrep_findings': []
             }
+
+        semgrep_findings = []
+        if code_content and file_extension:
+            semgrep_findings = self.scan_code_with_semgrep(code_content, file_extension)
+            context = f"Semgrep Analysis Results:\n{json.dumps(semgrep_findings, indent=2)}\n\n"
+        else:
+            context = ""
 
         retrieved_docs = self.vector_store.search(question, k)
-        if not retrieved_docs:
-            return {
-                'question': question,
-                'answer': "No relevant information found.",
-                'sources': [],
-                'confidence': 0.0
-            }
+        if retrieved_docs:
+            context += self._prepare_context(retrieved_docs, question)
+        elif not semgrep_findings:
+            context += "No relevant information found in PDFs."
 
-        context = self._prepare_context(retrieved_docs, question)
         if len(context) > self.config['max_context_length']:
             context = context[:self.config['max_context_length']]
             logger.warning(f"Context truncated to {self.config['max_context_length']} characters")
@@ -549,13 +620,17 @@ class ImprovedRAGWithQwen14B:
 
         confidence = self._calculate_answer_confidence(retrieved_docs, answer)
         sources = self._prepare_sources(retrieved_docs)
-        self.conversation_history.append({
+        history_entry = {
             'question': question,
             'answer': answer,
             'sources': [doc['source'] for doc in retrieved_docs],
             'confidence': confidence,
             'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
-        })
+        }
+        if semgrep_findings:
+            history_entry['semgrep_findings'] = semgrep_findings
+
+        self.conversation_history.append(history_entry)
         self._save_conversation_history()
 
         return {
@@ -564,7 +639,8 @@ class ImprovedRAGWithQwen14B:
             'sources': sources,
             'confidence': confidence,
             'retrieval_scores': [doc['final_score'] for doc in retrieved_docs],
-            'prompt_used': prompt if self.config.get('include_prompt') else None
+            'prompt_used': prompt if self.config.get('include_prompt') else None,
+            'semgrep_findings': semgrep_findings
         }
 
     def _prepare_context(self, docs: List[Dict], question: str) -> str:
@@ -609,76 +685,158 @@ class ImprovedRAGWithQwen14B:
             'content_preview': doc['content'][:200] + ("..." if len(doc['content']) > 200 else "")
         } for doc in docs]
 
+
+@st.cache_resource
+def initialize_rag(pdf_dir: str, history_file: str) -> ImprovedRAGWithQwen14B:
+    """Initialize and cache the RAG instance with PDF loading."""
+    logger.info(f"Initializing RAG instance for {history_file}")
+    config = ConfigManager.get_config({'history_file': history_file})
+    rag = ImprovedRAGWithQwen14B(pdf_dir, config)
+    rag.load_pdfs()
+    return rag
+
+
 def main():
-    """Main function for running the RAG system."""
+    """Streamlit frontend for the RAG system with Semgrep integration."""
+    st.set_page_config(page_title="Qwen-3 14B RAG with Semgrep", layout="wide")
+    st.title("🤖 Qwen-3 14B RAG System with Semgrep")
+    st.markdown("""
+    Welcome to the RAG system! Ask cybersecurity questions or upload code for Semgrep analysis.
+    - Select or create a conversation.
+    - Enter a question or upload a code file (e.g., .py, .js, .java).
+    - View responses, Semgrep findings, and sources below.
+    """)
 
-    # === Chat selection helper ===
-    def select_conversation() -> str:
-        conversation_dir = Path("conversations")
-        conversation_dir.mkdir(exist_ok=True)
-        existing_chats = sorted(conversation_dir.glob("chat_*.json"))
+    # Initialize session state
+    if 'current_conversation' not in st.session_state:
+        st.session_state.current_conversation = None
+    if 'history' not in st.session_state:
+        st.session_state.history = []
+    if 'rag_initialized' not in st.session_state:
+        st.session_state.rag_initialized = False
 
-        if existing_chats:
-            print("\nAvailable Conversations:")
-            for idx, file in enumerate(existing_chats):
-                print(f"  {idx+1}. {file.stem}")
-            print("  0. Start a new conversation")
-            try:
-                choice = int(input("\nSelect a conversation number (or 0 for new): ").strip())
-                if choice == 0:
-                    name = input("Enter name for new conversation (or leave empty to auto-generate): ").strip()
-                    if not name:
-                        name = f"chat_{int(time.time())}"
-                    return str(conversation_dir / f"{name}.json")
-                elif 1 <= choice <= len(existing_chats):
-                    return str(existing_chats[choice - 1])
-            except Exception:
-                print("Invalid input. Defaulting to new conversation.")
-        return str(conversation_dir / f"chat_{int(time.time())}.json")
-    
-    parser = argparse.ArgumentParser(description="Qwen-3 14B RAG System")
-    parser.add_argument("--mode", choices=["interactive", "test", "benchmark", "demo"],
-                        default="interactive", help="Mode to run")
-    parser.add_argument("--pdf-dir", default="./pdfs", help="PDF directory path")
-    parser.add_argument("--history-file", default="conversation_history.json", help="JSON file for conversation history")
-    args = parser.parse_args()
+    # Conversation selection
+    conversation_dir = Path("conversations")
+    conversation_dir.mkdir(exist_ok=True)
+    existing_chats = sorted([f.stem for f in conversation_dir.glob("*.json")])
+    conversation_options = ["Create new conversation"] + existing_chats
 
-    selected_history_file = select_conversation()
-    config = ConfigManager.get_config({'history_file': selected_history_file})
-    rag = ImprovedRAGWithQwen14B(args.pdf_dir, config)
+    st.subheader("📬 Select or Create Conversation")
+    selected_conversation = st.selectbox("Choose a conversation:", conversation_options, key="conversation_select")
 
-    if args.mode == "interactive":
-        logger.info(f"\n💬 Active Conversation: {Path(selected_history_file).stem}")
-        rag.load_pdfs()
-        logger.info("\n" + "="*60 + "\n🤖 QWEN-3 14B RAG System Ready!\n" + "="*60)
-        while True:
-            question = input("\nYour question (or 'quit' to exit): ").strip()
-            if question.lower() in ['quit', 'exit', 'q']:
-                break
-            if not question:
-                continue
-            try:
-                result = rag.query(question)
-                response_lines = [
-                    f"\n📋 Question: {result['question']}",
-                    f"🤖 Answer: {result['answer']}",
-                    f"🎯 Confidence: {result['confidence']:.2f}",
-                    "\n📚 Sources:"
-                ]
-                for i, source in enumerate(result['sources'], 1):
-                    response_lines.append(
-                        f"  {i}. {source['source']} (Chunk {source['chunk_id']}, "
-                        f"Score: {source['final_score']:.3f}): "
-                        f"{source['content_preview']}"
-                    )
-                full_response = "\n".join(response_lines)
-                print(full_response)
-                if len(full_response) > 1000:
-                    with open(f"response_{int(time.time())}.txt", "w", encoding="utf-8") as f:
-                        f.write(full_response)
-                    logger.info("Response saved to file due to length")
-            except Exception as e:
-                logger.error(f"Error: {str(e)}")
+    # Handle conversation selection or creation
+    if selected_conversation != st.session_state.current_conversation:
+        st.session_state.current_conversation = selected_conversation
+        st.session_state.rag_initialized = False
+        st.session_state.history = []
+
+    if selected_conversation == "Create new conversation":
+        new_conversation_name = st.text_input("Enter a name for the new conversation:", key="new_conversation_name")
+        if new_conversation_name:
+            new_conversation_name = re.sub(r'[^\w\s-]', '', new_conversation_name).replace(' ', '_')
+            if not new_conversation_name:
+                st.error("Invalid name. Use alphanumeric characters, spaces, or hyphens.")
+            elif (conversation_dir / f"{new_conversation_name}.json").exists():
+                st.error(f"A conversation named '{new_conversation_name}' already exists.")
+            else:
+                conversation_file = str(conversation_dir / f"{new_conversation_name}.json")
+                st.session_state.rag = initialize_rag("./pdfs", conversation_file)
+                st.session_state.rag_initialized = True
+                st.session_state.history = st.session_state.rag.conversation_history
+                st.success(f"Created new conversation: {new_conversation_name}")
+    elif selected_conversation:
+        conversation_file = str(conversation_dir / f"{selected_conversation}.json")
+        if not st.session_state.rag_initialized:
+            st.session_state.rag = initialize_rag("./pdfs", conversation_file)
+            st.session_state.rag_initialized = True
+            st.session_state.history = st.session_state.rag.conversation_history
+            st.success(f"Loaded conversation: {selected_conversation}")
+
+    # Input section
+    if st.session_state.rag_initialized:
+        st.subheader("❓ Ask a Question or Upload Code")
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            question = st.text_area("Enter your question:", height=100, key="question_input")
+        with col2:
+            uploaded_file = st.file_uploader("Upload code file:", type=['py', 'js', 'java', 'c', 'cpp', 'go'], key="file_uploader")
+
+        if st.button("Submit", key="submit_button"):
+            if not question and not uploaded_file:
+                st.error("Please enter a question or upload a code file.")
+            else:
+                code_content = None
+                file_extension = None
+                if uploaded_file:
+                    code_content = uploaded_file.read().decode('utf-8', errors='replace')
+                    file_extension = uploaded_file.name.split('.')[-1].lower()
+                    question = question or "Analyze the uploaded code for vulnerabilities and provide recommendations."
+
+                try:
+                    with st.spinner("Processing..."):
+                        result = st.session_state.rag.query(question, code_content=code_content, file_extension=file_extension)
+                        st.session_state.history = st.session_state.rag.conversation_history
+
+                    # Display response
+                    st.subheader("📝 Response")
+                    st.markdown(f"**Question:** {result['question']}")
+                    st.markdown(f"**Answer:** {result['answer']}")
+                    st.markdown(f"**Confidence:** {result['confidence']:.2f}")
+
+                    if result['semgrep_findings']:
+                        st.subheader("🔍 Semgrep Findings")
+                        for i, finding in enumerate(result['semgrep_findings'], 1):
+                            if 'error' in finding:
+                                st.error(f"{i}. Error: {finding['error']}")
+                            else:
+                                st.markdown(f"""
+                                **{i}. Rule: {finding['rule_id']}**
+                                - **Severity:** {finding['severity']}
+                                - **File:** {finding['file_path']} (Line {finding['line']})
+                                - **Message:** {finding['message']}
+                                - **Code:** `{finding['code_snippet']}`
+                                - **CWE:** {', '.join(finding['cwe']) if finding['cwe'] else 'N/A'}
+                                - **OWASP:** {', '.join(finding['owasp']) if finding['owasp'] else 'N/A'}
+                                """)
+
+                    if result['sources']:
+                        st.subheader("📚 Sources")
+                        for i, source in enumerate(result['sources'], 1):
+                            st.markdown(f"""
+                            {i}. **{source['source']}** (Chunk {source['chunk_id']}, Score: {source['final_score']:.3f})
+                            - {source['content_preview']}
+                            """)
+
+                except Exception as e:
+                    st.error(f"Error: {str(e)}")
+                    logger.error(f"Query error: {str(e)}")
+
+        # Display conversation history
+        st.subheader("📜 Conversation History")
+        if st.session_state.history:
+            for entry in reversed(st.session_state.history[-5:]):
+                with st.expander(f"Q: {entry['question']} ({entry['timestamp']})"):
+                    st.markdown(f"**Answer:** {entry['answer']}")
+                    st.markdown(f"**Confidence:** {entry['confidence']:.2f}")
+                    if 'semgrep_findings' in entry and entry['semgrep_findings']:
+                        st.markdown("**Semgrep Findings:**")
+                        for i, finding in enumerate(entry['semgrep_findings'], 1):
+                            if 'error' in finding:
+                                st.markdown(f"{i}. Error: {finding['error']}")
+                            else:
+                                st.markdown(f"""
+                                {i}. **Rule:** {finding['rule_id']}
+                                - **Severity:** {finding['severity']}
+                                - **File:** {finding['file_path']} (Line {finding['line']})
+                                - **Message:** {finding['message']}
+                                - **Code:** `{finding['code_snippet']}`
+                                """)
+                    if entry['sources']:
+                        st.markdown("**Sources:**")
+                        for source in entry['sources']:
+                            st.markdown(f"- {source}")
+        else:
+            st.write("No conversation history yet.")
 
 if __name__ == "__main__":
     main()

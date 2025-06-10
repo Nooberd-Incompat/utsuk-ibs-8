@@ -1,0 +1,2 @@
+2025-06-10 15:20:36,539 - DEBUG - Starting new HTTPS connection (1): www.youtube.com:443
+2025-06-10 15:20:36,812 - DEBUG - https://www.youtube.com:443 "GET /watch?v=voZ7kt9v1as HTTP/1.1" 200 None

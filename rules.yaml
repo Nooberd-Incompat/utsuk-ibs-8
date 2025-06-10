@@ -1,106 +1,830 @@
 rules:
-  # SQL Injection Rules
-  - id: sql-injection-format-string
-    pattern: $DB.execute(f"... {$VAR} ...")
-    message: "SQL injection via f-string formatting"
-    severity: HIGH
-    languages: [python]
-
-  - id: sql-injection-basic
-    pattern: $DB.query($QUERY + $INPUT)
-    message: "SQL injection vulnerability detected"
-    severity: HIGH
-    languages: [python]
-
-  # Command Injection Rules  
-  - id: command-injection-os-system
-    pattern: os.system($INPUT)
-    message: "Command injection vulnerability"
-    severity: CRITICAL
-    languages: [python]
-
-  - id: command-injection-subprocess
-    pattern: subprocess.call($INPUT, shell=True)
-    message: "Command injection via subprocess"
-    severity: CRITICAL
-    languages: [python]
-
-  - id: code-injection-eval
-    pattern: eval($INPUT)
-    message: "Code injection via eval()"
-    severity: CRITICAL
-    languages: [python]
-
-  # Authentication Issues
-  - id: hardcoded-password
+  # Python security rules
+  - id: hardcoded-secret
     patterns:
-      - pattern: password = "..."
-      - pattern: secret_key = "..."
-      - pattern: api_key = "..."
-    message: "Hardcoded credentials detected"
-    severity: HIGH
+      - pattern-either:
+          - pattern: $SECRET = "..."
+          - pattern: $SECRET = '...'
+          - pattern: password = "..."
+          - pattern: api_key = "..."
+          - pattern: token = "..."
+    message: "Hardcoded secret/credential detected"
     languages: [python]
-
-  - id: jwt-no-verification
-    pattern: jwt.decode($TOKEN, verify=False)
-    message: "JWT signature verification disabled"
-    severity: HIGH
-    languages: [python]
-
-  # Cryptographic Issues
-  - id: weak-hash-md5
-    pattern: hashlib.md5($DATA)
-    message: "MD5 is cryptographically weak"
-    severity: MEDIUM
-    languages: [python]
-
-  - id: weak-hash-sha1
-    pattern: hashlib.sha1($DATA)
-    message: "SHA-1 is cryptographically weak"
-    severity: MEDIUM
-    languages: [python]
-
-  - id: insecure-random
-    patterns:
-      - pattern: random.random()
-      - pattern: random.randint(...)
-    message: "Cryptographically insecure random generation"
-    severity: MEDIUM
-    languages: [python]
-
-  # Data Exposure
-  - id: debug-mode-enabled
-    patterns:
-      - pattern: DEBUG = True
-      - pattern: app.debug = True
-    message: "Debug mode enabled in production"
-    severity: HIGH
-    languages: [python]
-
-  - id: sensitive-logging
-    patterns:
-      - pattern: print($PASSWORD)
-      - pattern: logging.info(f"... {$PASSWORD} ...")
-    message: "Sensitive data exposed in logs"
-    severity: HIGH
-    languages: [python]
-
-  # Input Validation
-  - id: path-traversal
-    pattern: open($USER_PATH, ...)
-    message: "Path traversal vulnerability"
-    severity: HIGH
-    languages: [python]
+    severity: ERROR
 
   - id: unsafe-deserialization
-    pattern: pickle.loads($USER_DATA)
-    message: "Unsafe deserialization with pickle"
-    severity: CRITICAL
+    patterns:
+      - pattern-either:
+          - pattern: pickle.loads(...)
+          - pattern: pickle.load(...)
+          - pattern: yaml.load(...)
+          - pattern: marshal.loads(...)
+    message: "Unsafe deserialization can lead to RCE"
     languages: [python]
+    severity: ERROR
 
-  # Network Security
-  - id: ssl-verification-disabled
-    pattern: requests.get($URL, verify=False)
-    message: "SSL certificate verification disabled"
-    severity: HIGH
+  - id: sql-injection
+    patterns:
+      - pattern-either:
+          - pattern: "SELECT ... " + $VAR
+          - pattern: "f\"SELECT ...{$VAR}\""
+          - pattern: "DELETE FROM ... " + $VAR
+          - pattern: "f\"INSERT INTO ...{$VAR}\""
+    message: "SQL Injection vulnerability - use parameterized queries"
     languages: [python]
+    severity: ERROR
+
+  - id: path-traversal
+    patterns:
+      - pattern-either:
+          - pattern: open($PATH, ...)
+          - pattern: Path($PATH)
+          - pattern: os.path.join(..., $USER_INPUT)
+    message: "Potential path traversal - validate file paths"
+    languages: [python]
+    severity: WARNING
+
+  - id: command-injection
+    patterns:
+      - pattern-either:
+          - pattern: os.system($CMD)
+          - pattern: subprocess.call($CMD, shell=True)
+          - pattern: subprocess.Popen($CMD, shell=True)
+          - pattern: eval($USER_INPUT)
+          - pattern: exec($USER_INPUT)
+    message: "Command injection vulnerability"
+    languages: [python]
+    severity: ERROR
+
+  - id: weak-crypto
+    patterns:
+      - pattern-either:
+          - pattern: hashlib.md5(...)
+          - pattern: hashlib.sha1(...)
+          - pattern: random.random()
+          - pattern: random.randint(...)
+    message: "Weak cryptographic practice detected"
+    languages: [python]
+    severity: WARNING
+
+  - id: insecure-file-permissions
+    pattern: os.chmod($PATH, 0o777)
+    message: "Overly permissive file permissions"
+    languages: [python]
+    severity: ERROR
+
+  - id: jwt-verify-disabled
+    pattern: jwt.decode($TOKEN, verify=False)
+    message: "JWT signature verification disabled"
+    languages: [python]
+    severity: ERROR
+
+  - id: debug-enabled
+    patterns:
+      - pattern-either:
+          - pattern: DEBUG = True
+          - pattern: app.debug = True
+          - pattern: FLASK_DEBUG = 1
+    message: "Debug mode enabled in production code"
+    languages: [python]
+    severity: WARNING
+
+  - id: cors-all-origins
+    pattern: CORS($APP, resources={r"/*": {"origins": "*"}})
+    message: "CORS allows all origins"
+    languages: [python]
+    severity: WARNING
+
+  - id: unvalidated-redirect
+    patterns:
+      - pattern-either:
+          - pattern: redirect($USER_INPUT)
+          - pattern: send_redirect($USER_INPUT)
+    message: "Unvalidated redirect vulnerability"
+    languages: [python]
+    severity: WARNING
+
+  - id: templating-injection
+    pattern: Template($TEMPLATE).render(...)
+    message: "Potential template injection vulnerability"
+    languages: [python]
+    severity: ERROR
+
+  - id: weak-ssl-config
+    patterns:
+      - pattern-either:
+          - pattern: ssl.PROTOCOL_TLSv1
+          - pattern: ssl.PROTOCOL_SSLv2
+          - pattern: ssl.PROTOCOL_SSLv3
+    message: "Weak SSL/TLS protocol version"
+    languages: [python]
+    severity: ERROR
+
+  - id: logging-sensitive-data
+    patterns:
+      - pattern-either:
+          - pattern: logging.info($SENSITIVE)
+          - pattern: print($PASSWORD)
+          - pattern: logger.debug($CREDS)
+    message: "Potential sensitive data exposure in logs"
+    languages: [python]
+    severity: WARNING
+
+  - id: unsafe-yaml
+    pattern: yaml.load($DATA)
+    message: "Unsafe YAML loading - use yaml.safe_load()"
+    languages: [python]
+    severity: ERROR
+
+  - id: insecure-temp-file
+    pattern: tempfile.mktemp(...)
+    message: "Use tempfile.mkstemp() for secure temporary files"
+    languages: [python]
+    severity: WARNING
+
+  - id: regex-dos
+    patterns:
+      - pattern-either:
+          - pattern: re.compile("(a+)+")
+          - pattern: re.compile("(.*.*)+")
+    message: "Potential ReDoS vulnerability in regex"
+    languages: [python]
+    severity: WARNING
+
+  - id: xml-xxe
+    patterns:
+      - pattern-either:
+          - pattern: etree.parse($XML)
+          - pattern: minidom.parse($XML)
+    message: "Potential XXE vulnerability - disable external entity processing"
+    languages: [python]
+    severity: WARNING
+
+  - id: session-fixation
+    pattern: session.regenerate_id(False)
+    message: "Session fixation vulnerability"
+    languages: [python]
+    severity: ERROR
+
+  - id: uncontrolled-format-string
+    pattern: format($USER_INPUT)
+    message: "Uncontrolled format string"
+    languages: [python]
+    severity: WARNING
+
+  - id: hardcoded-ip-address
+    patterns:
+      - pattern-either:
+          - pattern: $VAR = "192.168..."
+          - pattern: $VAR = "10.0..."
+          - pattern: $VAR = "172.16..."
+          - pattern: connect_to("$IP", ...)
+    message: "Hardcoded IP address detected - use configuration"
+    languages: [python]
+    severity: WARNING
+
+  - id: empty-password
+    patterns:
+      - pattern-either:
+          - pattern: password = ""
+          - pattern: passwd = ""
+          - pattern: pwd = ""
+    message: "Empty password field detected"
+    languages: [python]
+    severity: ERROR
+
+  - id: hardcoded-database-creds
+    patterns:
+      - pattern-either:
+          - pattern: mysql.connect(password="...", ...)
+          - pattern: psycopg2.connect(password="...", ...)
+          - pattern: MongoClient("mongodb://user:password@...")
+    message: "Hardcoded database credentials detected"
+    languages: [python]
+    severity: ERROR
+
+  - id: hardcoded-encryption-key
+    patterns:
+      - pattern-either:
+          - pattern: AES.new(b"...", ...)
+          - pattern: Fernet(b"...")
+          - pattern: key = b"..."
+    message: "Hardcoded encryption key detected"
+    languages: [python]
+    severity: ERROR
+
+  - id: flask-secret-key-hardcoded
+    patterns:
+      - pattern-either:
+          - pattern: app.secret_key = "..."
+          - pattern: SECRET_KEY = "..."
+    message: "Flask secret key is hardcoded"
+    languages: [python]
+    severity: ERROR
+
+  - id: django-secret-key-hardcoded
+    pattern: SECRET_KEY = "..."
+    message: "Django secret key is hardcoded"
+    languages: [python]
+    severity: ERROR
+
+  - id: insecure-random-crypto
+    patterns:
+      - pattern-either:
+          - pattern: random.choice($CHARSET)
+          - pattern: random.sample($CHARSET, ...)
+          - pattern: uuid.uuid1()
+    message: "Insecure randomness for cryptographic purposes - use secrets module"
+    languages: [python]
+    severity: ERROR
+
+  - id: deprecated-hashlib
+    patterns:
+      - pattern-either:
+          - pattern: hashlib.md4(...)
+          - pattern: hashlib.sha224(...)
+          - pattern: Crypto.Hash.MD2.new(...)
+    message: "Use of deprecated or weak hash function"
+    languages: [python]
+    severity: WARNING
+
+  - id: insecure-random-token
+    patterns:
+      - pattern-either:
+          - pattern: str(random.randint(...))
+          - pattern: hex(random.getrandbits(...))
+    message: "Insecure random token generation - use secrets.token_hex()"
+    languages: [python]
+    severity: ERROR
+
+  - id: deprecated-ssl-cipher
+    patterns:
+      - pattern-either:
+          - pattern: ssl.OP_NO_TLSv1_2
+          - pattern: "RC4"
+          - pattern: "DES"
+    message: "Use of deprecated or insecure SSL cipher"
+    languages: [python]
+    severity: ERROR
+
+  - id: ldap-injection
+    patterns:
+      - pattern-either:
+          - pattern: ldap.search_s($BASE, ldap.SCOPE_SUBTREE, $FILTER)
+          - pattern: connection.search($FILTER, ...)
+    message: "Potential LDAP injection - sanitize filter input"
+    languages: [python]
+    severity: ERROR
+
+  - id: nosql-injection
+    patterns:
+      - pattern-either:
+          - pattern: collection.find({"$where": $JS})
+          - pattern: db.eval($CODE)
+          - pattern: collection.find({$FIELD: {"$regex": $PATTERN}})
+    message: "Potential NoSQL injection vulnerability"
+    languages: [python]
+    severity: ERROR
+
+  - id: unsafe-reflection
+    patterns:
+      - pattern-either:
+          - pattern: getattr($OBJ, $USER_INPUT)
+          - pattern: setattr($OBJ, $USER_INPUT, ...)
+          - pattern: hasattr($OBJ, $USER_INPUT)
+    message: "Unsafe reflection - validate attribute names"
+    languages: [python]
+    severity: WARNING
+
+  - id: python2-input-vulnerability
+    pattern: input($PROMPT)
+    message: "Python 2 input() function is vulnerable to code injection"
+    languages: [python]
+    severity: ERROR
+
+  - id: ssl-verify-disabled
+    patterns:
+      - pattern-either:
+          - pattern: requests.get($URL, verify=False)
+          - pattern: requests.post($URL, verify=False)
+          - pattern: urllib3.disable_warnings()
+    message: "SSL certificate verification disabled"
+    languages: [python]
+    severity: ERROR
+
+  - id: assert-security-check
+    pattern: assert $SECURITY_CHECK, $MSG
+    message: "Using assert for security checks - asserts can be disabled in production"
+    languages: [python]
+    severity: WARNING
+
+  - id: directory-listing-enabled
+    patterns:
+      - pattern-either:
+          - pattern: DIRECTORY_LISTING = True
+          - pattern: autoindex = True
+    message: "Directory listing is enabled"
+    languages: [python]
+    severity: WARNING
+
+  - id: cookie-without-secure
+    pattern: set_cookie($NAME, $VALUE, secure=False)
+    message: "Cookie without Secure flag"
+    languages: [python]
+    severity: WARNING
+
+  - id: cookie-without-httponly
+    pattern: set_cookie($NAME, $VALUE, httponly=False)
+    message: "Cookie without HttpOnly flag"
+    languages: [python]
+    severity: WARNING
+
+  - id: csrf-protection-disabled
+    patterns:
+      - pattern-either:
+          - pattern: WTF_CSRF_ENABLED = False
+          - pattern: csrf.exempt($VIEW)
+    message: "CSRF protection is disabled"
+    languages: [python]
+    severity: ERROR
+
+  - id: unsafe-file-upload
+    patterns:
+      - pattern-either:
+          - pattern: file.save($PATH)
+          - pattern: open($FILENAME, "wb").write($DATA)
+    message: "Unsafe file upload - validate file type and location"
+    languages: [python]
+    severity: WARNING
+
+  - id: race-condition-file
+    pattern: |
+      if os.path.exists($PATH):
+          open($PATH, ...)
+    message: "Potential race condition in file operations"
+    languages: [python]
+    severity: WARNING
+
+  - id: unvalidated-file-extension
+    patterns:
+      - pattern-either:
+          - pattern: $FILENAME.endswith($EXT)
+          - pattern: os.path.splitext($FILENAME)[1]
+    message: "File extension validation may be bypassable"
+    languages: [python]
+    severity: WARNING
+
+  - id: mass-assignment
+    patterns:
+      - pattern-either:
+          - pattern: Model.objects.create(**$REQUEST_DATA)
+          - pattern: Model(**$REQUEST_DATA).save()
+    message: "Mass assignment vulnerability - whitelist allowed fields"
+    languages: [python]
+    severity: ERROR
+
+  - id: improper-error-handling
+    patterns:
+      - pattern-either:
+          - pattern: except Exception as e: print(e)
+          - pattern: except: traceback.print_exc()
+    message: "Error handling may expose sensitive information"
+    languages: [python]
+    severity: WARNING
+
+  - id: shell-injection-risk
+    patterns:
+      - pattern-either:
+          - pattern: subprocess.call($CMD, shell=True, ...)
+          - pattern: os.popen($CMD)
+          - pattern: commands.getoutput($CMD)
+    message: "Shell injection risk - avoid shell=True with user input"
+    languages: [python]
+    severity: ERROR
+
+  - id: dill-deserialization
+    patterns:
+      - pattern-either:
+          - pattern: dill.loads(...)
+          - pattern: dill.load(...)
+    message: "Unsafe deserialization with dill"
+    languages: [python]
+    severity: ERROR
+
+  - id: pickle-untrusted-data
+    pattern: pickle.loads($UNTRUSTED_DATA)
+    message: "Pickle deserialization of untrusted data"
+    languages: [python]
+    severity: ERROR
+
+  - id: integer-overflow-risk
+    patterns:
+      - pattern-either:
+          - pattern: int($USER_INPUT) * $LARGE_NUMBER
+          - pattern: pow($BASE, $USER_INPUT)
+    message: "Potential integer overflow with user input"
+    languages: [python]
+    severity: WARNING
+
+  # Java security rules
+  - id: java-sql-injection
+    patterns:
+      - pattern-either:
+          - pattern: Statement.executeQuery($QUERY + $VAR)
+          - pattern: Statement.execute($QUERY + $VAR)
+          - pattern: Statement.executeUpdate($QUERY + $VAR)
+    message: "SQL Injection vulnerability - use PreparedStatement"
+    languages: [java]
+    severity: ERROR
+
+  - id: java-xss
+    patterns:
+      - pattern-either:
+          - pattern: response.getWriter().print($USER_INPUT)
+          - pattern: response.getWriter().println($USER_INPUT)
+    message: "Potential XSS - encode user input"
+    languages: [java]
+    severity: ERROR
+
+  - id: java-path-traversal
+    patterns:
+      - pattern-either:
+          - pattern: new File($USER_PATH)
+          - pattern: Paths.get($USER_PATH)
+    message: "Path traversal vulnerability"
+    languages: [java]
+    severity: ERROR
+
+  - id: java-weak-crypto
+    patterns:
+      - pattern-either:
+          - pattern: "MD5"
+          - pattern: "SHA-1"
+          - pattern: Cipher.getInstance("DES")
+          - pattern: Cipher.getInstance("RC4")
+    message: "Weak cryptographic algorithm usage"
+    languages: [java]
+    severity: ERROR
+
+  - id: java-xxe
+    patterns:
+      - pattern-either:
+          - pattern: DocumentBuilderFactory.newInstance()
+          - pattern: SAXParserFactory.newInstance()
+    message: "XXE vulnerability - disable external entity processing"
+    languages: [java]
+    severity: ERROR
+
+  - id: java-unsafe-reflection
+    patterns:
+      - pattern-either:
+          - pattern: Class.forName($CLASS_NAME)
+          - pattern: $OBJ.getClass().getDeclaredMethod($METHOD_NAME)
+    message: "Unsafe reflection usage"
+    languages: [java]
+    severity: WARNING
+
+  - id: java-command-injection
+    patterns:
+      - pattern-either:
+          - pattern: Runtime.getRuntime().exec($CMD)
+          - pattern: ProcessBuilder($CMD)
+    message: "Command injection vulnerability"
+    languages: [java]
+    severity: ERROR
+
+  - id: java-insecure-cookie
+    patterns:
+      - pattern-either:
+          - pattern: Cookie($NAME, $VALUE)
+          - pattern: response.addCookie(new Cookie($NAME, $VALUE))
+    message: "Cookie created without secure attributes"
+    languages: [java]
+    severity: WARNING
+
+  - id: java-weak-prng
+    patterns:
+      - pattern-either:
+          - pattern: new Random()
+          - pattern: Math.random()
+    message: "Weak PRNG usage - use SecureRandom"
+    languages: [java]
+    severity: ERROR
+
+  - id: java-hardcoded-key
+    pattern: "private static final String KEY = \"...\""
+    message: "Hardcoded encryption key"
+    languages: [java]
+    severity: ERROR
+
+  - id: java-deserialization
+    patterns:
+      - pattern-either:
+          - pattern: ObjectInputStream.readObject()
+          - pattern: XMLDecoder.readObject()
+    message: "Unsafe Java deserialization"
+    languages: [java]
+    severity: ERROR
+
+  - id: java-trust-boundary
+    patterns:
+      - pattern-either:
+          - pattern: request.getParameter($PARAM)
+          - pattern: request.getHeader($HEADER)
+    message: "Untrusted data crossing trust boundary"
+    languages: [java]
+    severity: WARNING
+
+  - id: java-weak-ssl
+    patterns:
+      - pattern-either:
+          - pattern: SSLContext.getInstance("SSL")
+          - pattern: TLS1_0
+          - pattern: SSLv3
+    message: "Weak SSL/TLS configuration"
+    languages: [java]
+    severity: ERROR
+
+  - id: java-logging-injection
+    patterns:
+      - pattern-either:
+          - pattern: logger.info($USER_INPUT)
+          - pattern: System.out.println($USER_INPUT)
+    message: "Log injection vulnerability"
+    languages: [java]
+    severity: WARNING
+
+  - id: java-spring-csrf
+    pattern: "@EnableWebSecurity(csrf = false)"
+    message: "CSRF protection disabled in Spring Security"
+    languages: [java]
+    severity: ERROR
+
+  - id: java-file-disclosure
+    patterns:
+      - pattern-either:
+          - pattern: response.addHeader("Content-Disposition", "attachment; filename=" + $FILE)
+          - pattern: new FileInputStream($PATH)
+    message: "Potential file disclosure vulnerability"
+    languages: [java]
+    severity: WARNING
+
+  # Javascript security rules
+  - id: js-eval-injection
+    patterns:
+      - pattern-either:
+          - pattern: eval($USER_INPUT)
+          - pattern: new Function($USER_INPUT)
+          - pattern: setTimeout($USER_INPUT)
+    message: "Dangerous eval() usage with user input"
+    languages: [javascript]
+    severity: ERROR
+
+  - id: js-xss
+    patterns:
+      - pattern-either:
+          - pattern: innerHTML = $VAR
+          - pattern: document.write($VAR)
+          - pattern: outerHTML = $VAR
+    message: "Potential XSS vulnerability"
+    languages: [javascript]
+    severity: ERROR
+
+  - id: js-prototype-pollution
+    patterns:
+      - pattern-either:
+          - pattern: Object.assign($OBJ, $USER_INPUT)
+          - pattern: $OBJ.__proto__
+          - pattern: Object.prototype
+    message: "Possible prototype pollution"
+    languages: [javascript]
+    severity: ERROR
+
+  - id: js-insecure-random
+    pattern: Math.random()
+    message: "Insecure random number generation"
+    languages: [javascript]
+    severity: WARNING
+
+  - id: js-regex-dos
+    pattern: new RegExp($USER_INPUT)
+    message: "Potential ReDoS vulnerability"
+    languages: [javascript]
+    severity: ERROR
+
+  - id: js-nosql-injection
+    patterns:
+      - pattern-either:
+          - pattern: db.collection.find({$where: $USER_INPUT})
+          - pattern: db.collection.findOne({$where: $USER_INPUT})
+    message: "NoSQL injection vulnerability"
+    languages: [javascript]
+    severity: ERROR
+
+  - id: js-unsafe-file-upload
+    patterns:
+      - pattern-either:
+          - pattern: multer({dest: $PATH})
+          - pattern: fs.writeFileSync($PATH, $DATA)
+    message: "Unsafe file upload configuration"
+    languages: [javascript]
+    severity: WARNING
+
+  - id: js-insecure-jwt
+    patterns:
+      - pattern-either:
+          - pattern: jwt.verify($TOKEN, $SECRET, {algorithms: ["none"]})
+          - pattern: jwt.sign($PAYLOAD, $SECRET, {algorithm: "none"})
+    message: "Insecure JWT configuration"
+    languages: [javascript]
+    severity: ERROR
+
+  - id: js-weak-crypto
+    patterns:
+      - pattern-either:
+          - pattern: crypto.createHash('md5')
+          - pattern: crypto.createHash('sha1')
+    message: "Weak cryptographic algorithm"
+    languages: [javascript]
+    severity: ERROR
+
+  - id: js-websocket-unsecure
+    pattern: new WebSocket("ws://")
+    message: "Insecure WebSocket connection"
+    languages: [javascript]
+    severity: ERROR
+
+  - id: js-dom-xss
+    patterns:
+      - pattern-either:
+          - pattern: element.insertAdjacentHTML($POS, $DATA)
+          - pattern: document.createTextNode($USER_INPUT)
+    message: "Potential DOM-based XSS"
+    languages: [javascript]
+    severity: ERROR
+
+  - id: js-cors-unsafe
+    pattern: "Access-Control-Allow-Origin: *"
+    message: "Unsafe CORS configuration"
+    languages: [javascript]
+    severity: WARNING
+
+  - id: js-postmessage-origin
+    pattern: window.addEventListener("message", $HANDLER)
+    message: "Missing origin check in postMessage handler"
+    languages: [javascript]
+    severity: ERROR
+
+  - id: js-localstorage-sensitive
+    patterns:
+      - pattern-either:
+          - pattern: localStorage.setItem($KEY, $SENSITIVE)
+          - pattern: sessionStorage.setItem($KEY, $SENSITIVE)
+    message: "Sensitive data in client storage"
+    languages: [javascript]
+    severity: WARNING
+
+  - id: js-sql-injection-orm
+    patterns:
+      - pattern-either:
+          - pattern: sequelize.query($RAW_QUERY)
+          - pattern: knex.raw($SQL)
+    message: "SQL injection in ORM usage"
+    languages: [javascript]
+    severity: ERROR
+
+  # C++ security rules
+  - id: cpp-buffer-overflow
+    patterns:
+      - pattern-either:
+          - pattern: strcpy($DEST, $SRC)
+          - pattern: strcat($DEST, $SRC)
+          - pattern: gets($BUF)
+    message: "Potential buffer overflow - use safe alternatives"
+    languages: [cpp]
+    severity: ERROR
+
+  - id: cpp-integer-overflow
+    patterns:
+      - pattern-either:
+          - pattern: $INT + $USER_INPUT
+          - pattern: $INT * $USER_INPUT
+          - pattern: sizeof($VAR) * $USER_INPUT
+    message: "Possible integer overflow"
+    languages: [cpp]
+    severity: ERROR
+
+  - id: cpp-format-string
+    pattern: printf($FORMAT)
+    message: "Format string vulnerability"
+    languages: [cpp]
+    severity: ERROR
+
+  - id: cpp-memory-leak
+    patterns:
+      - pattern-either:
+          - pattern: new $TYPE
+          - pattern: malloc($SIZE)
+          - pattern: calloc($NUM, $SIZE)
+    message: "Potential memory leak - ensure proper deallocation"
+    languages: [cpp]
+    severity: WARNING
+
+  - id: cpp-use-after-free
+    patterns:
+      - pattern-either:
+          - pattern: delete $PTR;
+          - pattern: free($PTR)
+    message: "Potential use after free vulnerability"
+    languages: [cpp]
+    severity: ERROR
+
+  - id: cpp-double-free
+    patterns:
+      - pattern-either:
+          - pattern: delete[] $PTR
+          - pattern: free($PTR)
+    message: "Potential double free vulnerability"
+    languages: [cpp]
+    severity: ERROR
+
+  - id: cpp-uninitialized-var
+    pattern: $TYPE $VAR;
+    message: "Uninitialized variable usage"
+    languages: [cpp]
+    severity: WARNING
+
+  - id: cpp-unchecked-array
+    patterns:
+      - pattern-either:
+          - pattern: $ARRAY[$INDEX]
+          - pattern: $PTR[$INDEX]
+    message: "Array access without bounds checking"
+    languages: [cpp]
+    severity: ERROR
+
+  - id: cpp-unsafe-cast
+    patterns:
+      - pattern-either:
+          - pattern: reinterpret_cast<$TYPE>($PTR)
+          - pattern: (($TYPE)$PTR)
+    message: "Unsafe type casting"
+    languages: [cpp]
+    severity: WARNING
+
+  - id: cpp-race-condition
+    pattern: static $TYPE $VAR
+    message: "Potential race condition with static variable"
+    languages: [cpp]
+    severity: WARNING
+
+  - id: cpp-overflow-check
+    patterns:
+      - pattern-either:
+          - pattern: memcpy($DEST, $SRC, sizeof($DEST))
+          - pattern: strncpy($DEST, $SRC, sizeof($DEST))
+    message: "Buffer overflow in memory operations"
+    languages: [cpp]
+    severity: ERROR
+
+  - id: cpp-null-deref
+    patterns:
+      - pattern-either:
+          - pattern: if (!$PTR) { $PTR->$MEMBER }
+          - pattern: $PTR->$MEMBER
+    message: "Potential null pointer dereference"
+    languages: [cpp]
+    severity: ERROR
+
+  - id: cpp-dangling-pointer
+    pattern: "$PTR = &$LOCAL_VAR"
+    message: "Potential dangling pointer"
+    languages: [cpp]
+    severity: ERROR
+
+  - id: cpp-stack-buffer
+    patterns:
+      - pattern-either:
+          - pattern: char buffer[$SIZE]
+          - pattern: int array[$USER_INPUT]
+    message: "Unsafe stack buffer usage"
+    languages: [cpp]
+    severity: WARNING
+
+  - id: cpp-global-buffer
+    pattern: "char $BUFFER[1024];"
+    message: "Global buffer vulnerability"
+    languages: [cpp]
+    severity: WARNING
+
+  - id: cpp-throw-exception
+    pattern: "throw $EXCEPTION;"
+    message: "Uncaught exception potential"
+    languages: [cpp]
+    severity: WARNING
+
+  - id: cpp-rand-seed
+    pattern: "srand(time(NULL))"
+    message: "Weak random number generator seeding"
+    languages: [cpp]
+    severity: ERROR

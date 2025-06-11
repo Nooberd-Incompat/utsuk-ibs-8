@@ -20,6 +20,7 @@ import subprocess
 import streamlit as st
 from torch import autocast
 import torch
+import hashlib # Added for caching
 
 # Fix asyncio on Windows
 if sys.platform == "win32":
@@ -45,6 +46,8 @@ class ConfigManager:
         'embedding_batch_size': 64,
         'history_file': 'conversation_history',
         'upload_dir': 'uploads',
+        # --- New setting for caching ---
+        'cache_dir': 'embedding_cache',
         'generation_params': {
             'max_new_tokens': 2048,
             'temperature': 0.7,
@@ -78,6 +81,9 @@ class ConfigManager:
             config['history_file'] = config['history_file'][:-5]
         if not Path(config['upload_dir']).is_dir():
             Path(config['upload_dir']).mkdir(exist_ok=True)
+        # --- New validation for cache directory ---
+        if not Path(config['cache_dir']).is_dir():
+            Path(config['cache_dir']).mkdir(exist_ok=True)
 
 class OptimizedPDFProcessor:
     """Processes PDF files with optimized text extraction."""
@@ -250,22 +256,37 @@ class EnhancedVectorStore:
         self._build_index()
 
     def _build_index(self):
-        """Builds FAISS index for embeddings."""
+        """Builds FAISS index for embeddings. Normalizes vectors for efficient cosine similarity search."""
+        if self.embeddings is None or self.embeddings.shape[0] == 0:
+            logger.warning("No embeddings available to build the index.")
+            self.index = None
+            return
+        
         dimension = self.embeddings.shape[1]
+        # Normalize embeddings for cosine similarity search with IndexFlatIP
+        embeddings_normalized = self.embeddings.astype('float32')
+        faiss.normalize_L2(embeddings_normalized)
+        
         self.index = faiss.IndexFlatIP(dimension)
-        normalized_embeddings = self.embeddings / np.linalg.norm(self.embeddings, axis=1, keepdims=True)
-        self.index.add(normalized_embeddings.astype('float32'))
+        self.index.add(embeddings_normalized)
+        logger.info(f"Built FAISS index with {self.index.ntotal} vectors.")
 
     def search(self, query: str, k: int = 5) -> List[Dict[str, Any]]:
         """Performs hybrid search with reranking."""
-        if not self.index:
+        if not self.index or len(self.documents) == 0:
             return []
-        query_embedding = self.embedder.encode([query], convert_to_tensor=True, device=self.device)
-        query_embedding = query_embedding / np.linalg.norm(query_embedding, axis=1, keepdims=True)
-        scores, indices = self.index.search(query_embedding.cpu().numpy().astype('float32'), min(k * 2, len(self.documents)))
+
+        # Embed and normalize the query vector
+        query_embedding = self.embedder.encode([query], convert_to_tensor=False)
+        query_embedding_normalized = query_embedding.reshape(1, -1).astype('float32')
+        faiss.normalize_L2(query_embedding_normalized)
+        
+        # Search the index
+        scores, indices = self.index.search(query_embedding_normalized, min(k * 2, len(self.documents)))
+        
         results = [
             {**self.documents[idx], 'similarity_score': float(score)}
-            for score, idx in zip(scores[0], indices[0]) if idx < len(self.documents)
+            for score, idx in zip(scores[0], indices[0]) if idx != -1
         ]
         return self._rerank_results(results, query)[:k]
 
@@ -289,6 +310,48 @@ class EnhancedVectorStore:
         query_words = set(query.lower().split())
         content_words = set(content.lower().split())
         return len(query_words.intersection(content_words)) * 0.05
+
+    # --- New methods for caching ---
+    def save_to_cache(self, cache_prefix: str):
+        """Saves the vector store's state (documents and embeddings) to cache files."""
+        embeddings_path = f"{cache_prefix}_embeddings.npz"
+        documents_path = f"{cache_prefix}_documents.json"
+        try:
+            logger.info(f"Saving embeddings to {embeddings_path}")
+            np.savez_compressed(embeddings_path, embeddings=self.embeddings)
+
+            logger.info(f"Saving document metadata to {documents_path}")
+            with open(documents_path, 'w', encoding='utf-8') as f:
+                json.dump(self.documents, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.error(f"Failed to save cache to {cache_prefix}: {e}")
+
+    def load_from_cache(self, cache_prefix: str) -> bool:
+        """Loads the vector store's state from cache files."""
+        embeddings_path = Path(f"{cache_prefix}_embeddings.npz")
+        documents_path = Path(f"{cache_prefix}_documents.json")
+
+        if not embeddings_path.exists() or not documents_path.exists():
+            logger.warning("Cache files not found.")
+            return False
+
+        try:
+            logger.info(f"Loading embeddings from {embeddings_path}")
+            self.embeddings = np.load(embeddings_path)['embeddings']
+
+            logger.info(f"Loading document metadata from {documents_path}")
+            with open(documents_path, 'r', encoding='utf-8') as f:
+                self.documents = json.load(f)
+
+            logger.info("Rebuilding FAISS index from cached data...")
+            self._build_index()
+            logger.info(f"Successfully loaded {len(self.documents)} documents from cache.")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to load from cache at {cache_prefix}: {e}")
+            # Reset state in case of a partial or corrupted load
+            self.documents, self.index, self.embeddings = [], None, None
+            return False
 
 class Qwen14BGenerator:
     """Handles text generation with Qwen-3 14B via LM Studio."""
@@ -432,6 +495,9 @@ class ImprovedRAGWithQwen14B:
         self.history_file = Path(f"{self.config['history_file']}.json")
         self.upload_dir = Path(self.config['upload_dir'])
         self.upload_dir.mkdir(exist_ok=True)
+        # --- New cache directory management ---
+        self.cache_dir = Path(self.config['cache_dir'])
+        self.cache_dir.mkdir(exist_ok=True)
         self._load_conversation_history()
 
     def _load_conversation_history(self):
@@ -460,16 +526,47 @@ class ImprovedRAGWithQwen14B:
         except Exception as e:
             logger.error(f"Error saving {self.history_file}: {str(e)}")
 
+    # --- New method to generate a unique cache ID ---
+    def _get_cache_id(self) -> str:
+        """Creates a unique ID for the cache based on the PDF directory's absolute path."""
+        dir_path_str = str(self.pdf_directory.resolve())
+        return hashlib.md5(dir_path_str.encode('utf-8')).hexdigest()
+
+    # --- Rewritten method to use caching ---
     def load_pdfs(self):
-        """Loads and processes PDF files."""
-        pdf_files = list(self.pdf_directory.glob("*.pdf"))
+        """Loads and processes PDFs, using a cache to avoid re-creating embeddings."""
+        pdf_files = sorted(list(self.pdf_directory.glob("*.pdf")))
         if not pdf_files:
             logger.warning(f"No PDF files found in {self.pdf_directory}")
             return
 
-        logger.info(f"Processing {len(pdf_files)} PDF files...")
-        all_documents = []
+        cache_id = self._get_cache_id()
+        cache_prefix = str(self.cache_dir / cache_id)
+        manifest_path = self.cache_dir / f"{cache_id}_manifest.json"
 
+        # 1. Validate existing cache by comparing file manifests
+        current_manifest = {p.name: p.stat().st_mtime for p in pdf_files}
+        if manifest_path.exists():
+            logger.info("Found existing cache manifest. Validating...")
+            try:
+                with open(manifest_path, 'r', encoding='utf-8') as f:
+                    saved_manifest = json.load(f)
+                
+                if saved_manifest == current_manifest:
+                    logger.info("Cache is valid. Attempting to load embeddings from cache.")
+                    if self.vector_store.load_from_cache(cache_prefix):
+                        self._log_processing_stats(self.vector_store.documents)
+                        return  # Cache loaded successfully, we're done.
+                    else:
+                        logger.warning("Failed to load from cache files, despite valid manifest. Regenerating.")
+                else:
+                    logger.info("PDF files have changed. Regenerating embeddings.")
+            except (json.JSONDecodeError, IOError) as e:
+                logger.warning(f"Could not read cache manifest: {e}. Regenerating embeddings.")
+
+        # 2. If cache is invalid or absent, process PDFs from scratch
+        logger.info(f"Processing {len(pdf_files)} PDF files to create new embeddings...")
+        all_documents = []
         for pdf_file in pdf_files:
             logger.info(f"Processing {pdf_file.name}")
             extracted_data = self.pdf_processor.extract_text(str(pdf_file))
@@ -497,11 +594,22 @@ class ImprovedRAGWithQwen14B:
                 })
 
         if all_documents:
-            logger.info(f"Adding {len(all_documents)} chunks to vector store...")
+            logger.info(f"Adding {len(all_documents)} new chunks to the vector store...")
+            self.vector_store.documents, self.vector_store.embeddings = [], None
             self.vector_store.add_documents(all_documents)
             self._log_processing_stats(all_documents)
+
+            # 3. Save the newly created embeddings and manifest to the cache
+            logger.info("Saving new embeddings and manifest to cache...")
+            self.vector_store.save_to_cache(cache_prefix)
+            try:
+                with open(manifest_path, 'w', encoding='utf-8') as f:
+                    json.dump(current_manifest, f, indent=2)
+                logger.info(f"Cache manifest saved to {manifest_path}")
+            except IOError as e:
+                logger.error(f"Failed to save cache manifest: {e}")
         else:
-            logger.warning("No documents processed.")
+            logger.warning("No documents were processed. Cache was not updated.")
 
     def _calculate_chunk_quality(self, content: str) -> float:
         """Calculates quality score for a chunk."""
@@ -516,6 +624,7 @@ class ImprovedRAGWithQwen14B:
 
     def _log_processing_stats(self, documents: List[Dict]):
         """Logs processing statistics."""
+        if not documents: return
         total_chunks = len(documents)
         avg_chunk_size = sum(doc['word_count'] for doc in documents) / total_chunks
         avg_quality = sum(doc['metadata']['chunk_quality_score'] for doc in documents) / total_chunks
@@ -693,14 +802,14 @@ def initialize_rag(pdf_dir: str, history_file: str) -> ImprovedRAGWithQwen14B:
     logger.info(f"Initializing RAG instance for {history_file}")
     config = ConfigManager.get_config({'history_file': history_file})
     rag = ImprovedRAGWithQwen14B(pdf_dir, config)
-    rag.load_pdfs()
+    rag.load_pdfs() # This now uses the caching mechanism
     return rag
 
 
 def main():
     """Streamlit frontend for the RAG system with Semgrep integration."""
     st.set_page_config(page_title="Qwen-3 14B RAG with Semgrep", layout="wide")
-    st.title("🤖 Qwen-3 14B RAG System with Semgrep")
+    st.title("､�Qwen-3 14B RAG System with Semgrep")
     st.markdown("""
     Welcome to the RAG system! Ask cybersecurity questions or upload code for Semgrep analysis.
     - Select or create a conversation.
@@ -722,7 +831,7 @@ def main():
     existing_chats = sorted([f.stem for f in conversation_dir.glob("*.json")])
     conversation_options = ["Create new conversation"] + existing_chats
 
-    st.subheader("📬 Select or Create Conversation")
+    st.subheader("闘 Select or Create Conversation")
     selected_conversation = st.selectbox("Choose a conversation:", conversation_options, key="conversation_select")
 
     # Handle conversation selection or creation
@@ -755,7 +864,7 @@ def main():
 
     # Input section
     if st.session_state.rag_initialized:
-        st.subheader("❓ Ask a Question or Upload Code")
+        st.subheader("笶�Ask a Question or Upload Code")
         col1, col2 = st.columns([3, 1])
         with col1:
             question = st.text_area("Enter your question:", height=100, key="question_input")
@@ -779,13 +888,13 @@ def main():
                         st.session_state.history = st.session_state.rag.conversation_history
 
                     # Display response
-                    st.subheader("📝 Response")
+                    st.subheader("統 Response")
                     st.markdown(f"**Question:** {result['question']}")
                     st.markdown(f"**Answer:** {result['answer']}")
                     st.markdown(f"**Confidence:** {result['confidence']:.2f}")
 
                     if result['semgrep_findings']:
-                        st.subheader("🔍 Semgrep Findings")
+                        st.subheader("剥 Semgrep Findings")
                         for i, finding in enumerate(result['semgrep_findings'], 1):
                             if 'error' in finding:
                                 st.error(f"{i}. Error: {finding['error']}")
@@ -801,7 +910,7 @@ def main():
                                 """)
 
                     if result['sources']:
-                        st.subheader("📚 Sources")
+                        st.subheader("答 Sources")
                         for i, source in enumerate(result['sources'], 1):
                             st.markdown(f"""
                             {i}. **{source['source']}** (Chunk {source['chunk_id']}, Score: {source['final_score']:.3f})
@@ -813,7 +922,7 @@ def main():
                     logger.error(f"Query error: {str(e)}")
 
         # Display conversation history
-        st.subheader("📜 Conversation History")
+        st.subheader("糖 Conversation History")
         if st.session_state.history:
             for entry in reversed(st.session_state.history[-5:]):
                 with st.expander(f"Q: {entry['question']} ({entry['timestamp']})"):
